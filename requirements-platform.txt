@@ -21,3 +21,13 @@ redis==5.1.1
 
 # --- Test tooling for the API surface ---
 httpx==0.27.2
+
+# --- Schema migrations ---
+# `ecogrid.migrate` (create_all) bootstraps a brand-new database; Alembic is how
+# every subsequent change is applied. See alembic/versions/0001_baseline.py.
+alembic==1.13.3
+
+# --- Optional: real MLflow tracking for the AI Orchestrator ---
+# Uncomment to enable ECOGRID_MLFLOW_TRACKING_URI. Without it the orchestrator
+# logs runs to a local JSONL file, so this stays optional to keep the image slim.
+# mlflow==2.16.0

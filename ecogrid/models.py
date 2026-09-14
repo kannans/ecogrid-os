@@ -294,3 +294,39 @@ class ScheduleDecisionRow(Base):
         Index("ix_schedule_decisions_window_from_desc", window_from.desc()),
         Index("ix_schedule_decisions_action", "action"),
     )
+
+
+class OrchestratorAdviceRow(Base):
+    """A recommendation from the AI Orchestrator.
+
+    Advice is stored separately from the schedule it comments on, and is
+    immutable: the orchestrator's reasoning is a decision record. ``source``
+    distinguishes model-generated advice from the deterministic fallback, so a
+    reader always knows whether they are looking at judgement or a rule.
+    """
+
+    __tablename__ = "orchestrator_advice"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    #: The optimisation run this advice refers to (null if none existed yet).
+    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    #: ``claude`` | ``heuristic``
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    headline: Mapped[str] = mapped_column(String(280), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    recommended_actions: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    risk_flags: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    #: The exact inputs the advice was derived from — makes it auditable.
+    context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_orchestrator_advice_created_at_desc", created_at.desc()),
+        Index("ix_orchestrator_advice_source", "source"),
+    )

@@ -2,7 +2,8 @@
 
 Autonomous industrial energy arbitrage & decarbonization platform.
 
-**Current milestone: Phase 1 + 2 + 3 delivered.**
+**Current milestone: all layers delivered** — ingestion, platform core, plant
+operations, AI orchestration, and an operator dashboard behind an edge gateway.
 
 - **Phase 1 — Real-Time Grid Ingestion & The Event Backbone** (this repository):
   the local Dockerized infrastructure stack and the async Python ingestion
@@ -15,8 +16,16 @@ Autonomous industrial energy arbitrage & decarbonization platform.
   an AS400 / legacy plant bridge that streams industrial load onto the event
   spine, plus a carbon-arbitrage optimization loop that schedules flexible load
   into the cleanest windows and publishes the dispatch schedule.
+- **AI Orchestrator** (`ecogrid/orchestrator/`) — Claude reviews the optimizer's
+  output and returns a structured recommendation. A deterministic heuristic
+  advisor is the fallback whenever the model is unconfigured, unreachable, or
+  unparseable, so advice never goes silent. Runs are tracked in MLflow (or a
+  local JSONL sink when MLflow is absent).
+- **Dashboard** (`dashboard/`) — React + TypeScript arbitrage dashboard.
+- **Edge gateway** (`docker/nginx/`) — nginx terminating TLS, serving the
+  dashboard, applying coarse per-IP rate limiting, and proxying to the API.
 
-> **Verification status.** Phases 1–3 are implemented and pass **75 automated
+> **Verification status.** All layers are implemented and pass **92 automated
 > tests** offline (no network, broker, or database required). Phases 1 and 2 were
 > additionally verified live against a running PostgreSQL 15 / Redis 7 / Kafka
 > (KRaft) stack: the worker published and deduped telemetry, the consumer upserted
@@ -248,6 +257,9 @@ pytest -q                       # 75 tests across Phases 1-3; integration tests
 | `plant-bridge` | `ecogrid/platform-core:phase3` | — | AS400 plant-operations bridge → `ecogrid.telemetry.plant` (`--profile phase3`) | `./data` |
 | `plant-consumer` | `ecogrid/platform-core:phase3` | — | Plant telemetry → PostgreSQL, idempotent on `(plant_id, window_from)` (`--profile phase3`) | — |
 | `optimizer` | `ecogrid/platform-core:phase3` | — | Carbon-arbitrage loop → `ecogrid.decisions.schedule` (`--profile phase3`) | — |
+| `orchestrator` | `ecogrid/platform-core:phase3` | — | AI Orchestrator: Claude + heuristic fallback → `ecogrid.decisions.advice` (`--profile ai`) | `./data` |
+| `certs-init` | `alpine:3.19` | — | One-shot self-signed TLS material for the gateway (`--profile gateway`) | `./certs` |
+| `gateway` | `nginx:1.27-alpine` | `127.0.0.1:${GATEWAY_HTTP_PORT:-8080}` · `${GATEWAY_HTTPS_PORT:-8443}` | TLS termination, static dashboard, per-IP rate limit, reverse proxy (`--profile gateway`) | — |
 
 **Host port collisions.** Dev machines frequently already run native
 PostgreSQL on 5432 and Redis on 6379, which makes `docker compose up` fail with
@@ -486,6 +498,25 @@ supplies sane defaults; override to point at real plant systems.
 | `ECOGRID_OPTIMIZER_PROCESSES_JSON` | _(none)_ | JSON portfolio; falls back to the built-in 3 processes |
 | `ECOGRID_DATABRICKS_HOST` / `_TOKEN` / `_JOB_ID` | _(none)_ | Set all three to run on Databricks; otherwise the local solver is used |
 
+### AI Orchestrator settings
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ECOGRID_ORCHESTRATOR_ENABLED` | `true` | When false the loop idles instead of advising |
+| `ECOGRID_ORCHESTRATOR_INTERVAL_SECONDS` | `1800` | How often it reviews the schedule |
+| `ECOGRID_ANTHROPIC_API_KEY` | _(none)_ | **Unset ⇒ the heuristic advisor is used.** Advice never disappears |
+| `ECOGRID_ANTHROPIC_MODEL` | `claude-sonnet-4-20250514` | Pin a specific revision for reproducibility |
+| `ECOGRID_MLFLOW_TRACKING_URI` | _(none)_ | Unset (or mlflow absent) ⇒ local JSONL run log |
+| `ECOGRID_MLFLOW_EXPERIMENT` | `ecogrid-optimization` | |
+| `ECOGRID_ORCHESTRATOR_TRACKING_PATH` | `./data/orchestrator-runs.jsonl` | Fallback run log |
+
+### Gateway settings
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GATEWAY_HTTP_PORT` | `8080` | Plain HTTP (dashboard + proxy) |
+| `GATEWAY_HTTPS_PORT` | `8443` | TLS. Certs are read from `./certs` |
+
 **Why 300 seconds?** The upstream API publishes at half-hourly granularity, so
 a 5-minute cadence is ~6× oversampled — fast enough to catch revised forecasts
 and settle windows promptly, while staying comfortably inside the public rate
@@ -541,9 +572,20 @@ ecogrid-os/
 │       ├── solver.py       #     greedy lowest-carbon block scheduler
 │       ├── databricks.py   #     Databricks job submission + local fallback
 │       └── loop.py         #     forecast + capacity → schedule → Kafka
+│   └── orchestrator/       #   AI Orchestrator (Claude + MLflow)
+│       ├── advice.py       #     ClaudeAdvisor + deterministic HeuristicAdvisor
+│       ├── tracking.py     #     MLflow sink with local JSONL fallback
+│       ├── context.py      #     assembles the state the advisor reasons over
+│       └── loop.py         #     state → advice → persist → publish → track
+├── dashboard/               # React + TypeScript arbitrage dashboard (Vite)
+│   ├── src/api.ts          #   typed client for /api/v1
+│   └── src/App.tsx         #   platform · grid · plant · schedule · orchestrator
+├── alembic/                 # Schema migrations (baseline + future revisions)
+├── docker/nginx/nginx.conf  # Edge gateway: TLS, static assets, rate limiting
 ├── test_ingest_grid.py      # Phase 1 offline contract + resilience tests
 ├── test_platform.py         # Phase 2 unit + integration tests (auto-skip if no PG)
 ├── test_phase3.py           # Phase 3 tests: plant contract, sources, solver maths
+├── test_ai_orchestrator.py  # Orchestrator tests: advice, fallback, tracking
 ├── requirements.txt         # Phase 1 pinned deps (Python 3.11+)
 ├── requirements-platform.txt# Phase 2 deps (-r requirements.txt + FastAPI/SQLAlchemy/asyncpg)
 ├── .env.example             # Configuration template
@@ -574,5 +616,17 @@ ecogrid-os/
   to `ecogrid.decisions.schedule`. Bring up with
   `docker compose --profile phase3 up -d --build`; trigger a run with
   `POST /api/v1/optimize/run` (operator or admin).
+- **AI Orchestrator (built & verified)** — Claude advisor with a deterministic
+  heuristic fallback, MLflow/JSONL run tracking, `/orchestrator/*` endpoints, and
+  the `orchestrator` service (`--profile ai`). Fully functional without an API
+  key: it falls back rather than going silent.
+- **Dashboard (built)** — React + TypeScript + Vite app in `dashboard/`.
+  `npm run build` emits `dashboard/dist`, served by the gateway.
+- **Edge gateway + TLS (built)** — nginx terminates TLS (self-signed dev certs
+  generated by `certs-init`), serves the dashboard, applies per-IP rate limiting,
+  and proxies to the API (`--profile gateway`).
+- **Migrations (addressed)** — Alembic baseline in
+  `alembic/versions/0001_baseline.py`, so future schema changes are real
+  migrations rather than `create_all` drift.
 - **Verification** — step-by-step proof for every use case lives in
   [`docs/VERIFICATION.md`](docs/VERIFICATION.md).

@@ -100,6 +100,22 @@ class PlatformSettings(BaseSettings):
     databricks_token: str | None = None
     databricks_job_id: str | None = None
 
+    # --- AI Orchestrator (Claude + MLflow) ---
+    orchestrator_enabled: bool = True
+    orchestrator_interval_seconds: int = Field(default=1800, ge=60)
+    kafka_advice_topic: str = "ecogrid.decisions.advice"
+    #: Anthropic credentials. Without a key the orchestrator uses the
+    #: deterministic heuristic advisor instead of failing — see Advisor docs.
+    anthropic_api_key: str | None = None
+    #: Override to pin a specific model revision for reproducibility.
+    anthropic_model: str = "claude-sonnet-4-20250514"
+    anthropic_max_tokens: int = Field(default=1024, ge=64)
+    anthropic_timeout_seconds: float = Field(default=30.0, gt=0)
+    #: MLflow tracking URI. Unset (or mlflow not installed) -> local JSONL sink.
+    mlflow_tracking_uri: str | None = None
+    mlflow_experiment: str = "ecogrid-optimization"
+    orchestrator_tracking_path: str = "./data/orchestrator-runs.jsonl"
+
     # --- Logging ---
     log_level: str = "INFO"
 

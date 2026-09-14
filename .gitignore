@@ -20,3 +20,16 @@ data/heartbeat
 
 # Tooling caches
 .ruff_cache/
+
+# Dashboard build artefacts
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.npm-cache/
+# Vite writes a temp config shim next to vite.config.ts on every build.
+dashboard/vite.config.ts.timestamp-*
+
+# Generated TLS material (self-signed dev certs)
+certs/
+
+# Alembic runtime
+alembic/.venv/

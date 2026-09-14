@@ -194,3 +194,51 @@ class OptimizeRunResponse(BaseModel):
     unscheduled: list[str]
     notes: list[str]
     status: str = Field(description="`ok`, or `skipped` when there was nothing to optimise")
+
+
+# --------------------------------------------------------------------------- #
+# AI Orchestrator
+# --------------------------------------------------------------------------- #
+
+
+class AdviceOut(BaseModel):
+    """A stored orchestrator recommendation."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    run_id: str | None
+    #: ``claude`` or ``heuristic`` — always check this before acting on advice.
+    source: str
+    headline: str
+    rationale: str
+    confidence: float
+    recommended_actions: list[Any] = Field(default_factory=list)
+    risk_flags: list[Any] = Field(default_factory=list)
+    created_at: datetime
+
+
+class AdviceContextOut(BaseModel):
+    """The stored inputs an advice row was derived from."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    run_id: str | None
+    source: str
+    context: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class OrchestratorRunResponse(BaseModel):
+    """Result of triggering an orchestrator pass."""
+
+    run_id: str | None
+    source: str
+    headline: str
+    rationale: str
+    confidence: float
+    recommended_actions: list[str]
+    risk_flags: list[str]
+    published: bool
+    status: str = "ok"

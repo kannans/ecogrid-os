@@ -204,6 +204,10 @@ services:
           --partitions 1 --replication-factor 1 \
           --config cleanup.policy=compact,delete \
           --config retention.ms=604800000
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+          --topic "${KAFKA_ADVICE_TOPIC:-ecogrid.decisions.advice}" \
+          --partitions 1 --replication-factor 1 \
+          --config retention.ms=604800000
         kafka-topics --bootstrap-server kafka:29092 --describe \
           --topic "${KAFKA_TELEMETRY_TOPIC:-ecogrid.telemetry.carbon}"
         echo "[kafka-init] done."
@@ -410,6 +414,106 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # AI Orchestrator — Claude-backed judgement over the optimizer's output.
+  # Runs without an API key too: it falls back to the deterministic heuristic
+  # advisor, so advice never goes silent. Opt-in profile `ai`.
+  # ---------------------------------------------------------------------------
+  orchestrator:
+    <<: *platform-common
+    container_name: ecogrid-orchestrator
+    profiles: ["ai"]
+    command: ["python", "-m", "ecogrid.orchestrator.loop"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *platform-env
+      ECOGRID_ORCHESTRATOR_ENABLED: "${ECOGRID_ORCHESTRATOR_ENABLED:-true}"
+      ECOGRID_ORCHESTRATOR_INTERVAL_SECONDS: "${ECOGRID_ORCHESTRATOR_INTERVAL_SECONDS:-1800}"
+      # Optional. Without a key the heuristic advisor is used instead.
+      ECOGRID_ANTHROPIC_API_KEY: "${ECOGRID_ANTHROPIC_API_KEY:-}"
+      ECOGRID_ANTHROPIC_MODEL: "${ECOGRID_ANTHROPIC_MODEL:-claude-sonnet-4-20250514}"
+      # Optional. Without a URI, runs are logged to a local JSONL file.
+      ECOGRID_MLFLOW_TRACKING_URI: "${ECOGRID_MLFLOW_TRACKING_URI:-}"
+      ECOGRID_ORCHESTRATOR_TRACKING_PATH: "/app/data/orchestrator-runs.jsonl"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'ecogrid.orchestrator.loop' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # TLS material for the gateway. Generates a SELF-SIGNED certificate suitable
+  # for local development. For anything real, drop your own server.crt /
+  # server.key into ./certs — this service will not overwrite existing files.
+  # ---------------------------------------------------------------------------
+  certs-init:
+    image: alpine:3.19
+    container_name: ecogrid-certs-init
+    profiles: ["gateway"]
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mkdir -p /certs
+        if [ ! -f /certs/server.key ]; then
+          echo "[certs-init] generating a self-signed certificate for local TLS..."
+          apk add --no-cache openssl >/dev/null 2>&1
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /certs/server.key -out /certs/server.crt \
+            -days 365 -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" >/dev/null 2>&1
+          echo "[certs-init] wrote /certs/server.crt (self-signed, dev only)"
+        else
+          echo "[certs-init] existing certificate present — leaving it untouched"
+        fi
+    volumes:
+      - ./certs:/certs
+    networks:
+      - ecogrid-net
+
+  # ---------------------------------------------------------------------------
+  # Edge gateway: TLS termination, static dashboard, coarse per-IP rate limit,
+  # reverse proxy to the API. The API is no longer published on the host — all
+  # external traffic arrives here.
+  #
+  # Requires the dashboard to be built first: (cd dashboard && npm ci && npm run build)
+  # ---------------------------------------------------------------------------
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: ecogrid-gateway
+    profiles: ["gateway"]
+    restart: unless-stopped
+    depends_on:
+      certs-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${GATEWAY_HTTP_PORT:-8080}:8080"
+      - "127.0.0.1:${GATEWAY_HTTPS_PORT:-8443}:8443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+      - ./dashboard/dist:/usr/share/nginx/html:ro
+    networks:
+      - ecogrid-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
 networks:
   ecogrid-net:

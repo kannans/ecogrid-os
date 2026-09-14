@@ -283,11 +283,98 @@ would be worse than one that produces a slightly worse schedule.
 
 ---
 
+## UC-13 — The AI Orchestrator produces advice (with or without Claude)
+
+```bash
+docker compose --profile ai up -d --build
+docker compose logs -f orchestrator
+
+curl -s -X POST -H "X-API-Key: $ADMIN_KEY" "$API/api/v1/orchestrator/run"
+curl -s -H "X-API-Key: $ADMIN_KEY" "$API/api/v1/orchestrator/latest"
+curl -s -H "X-API-Key: $ADMIN_KEY" "$API/api/v1/orchestrator/advice?limit=5"
+```
+
+**Pass criteria:** `POST /orchestrator/run` returns **200** with a non-empty
+`headline`, `confidence` in `[0,1]`, and a `source` of **`heuristic`** when no
+`ECOGRID_ANTHROPIC_API_KEY` is set (or **`claude`** when one is). Advice is
+produced either way — the platform never goes silent. Triggering with a **viewer**
+key returns **403**.
+*Automated: yes — `test_ai_orchestrator.py` covers the heuristic rules and the
+fallback paths.*
+
+## UC-14 — The orchestrator degrades gracefully when the model is unreachable
+
+Set a deliberately invalid key and restart:
+
+```bash
+ECOGRID_ANTHROPIC_API_KEY=sk-invalid docker compose --profile ai up -d --force-recreate orchestrator
+docker compose logs orchestrator | grep -i "falling back"
+curl -s -X POST -H "X-API-Key: $ADMIN_KEY" "$API/api/v1/orchestrator/run"
+```
+
+**Pass criteria:** the log records a fallback (HTTP error, transport error, or
+unparseable output) and the response still carries `source=heuristic`. Unvalidated
+model output is never stored — if the reply cannot be parsed or fails schema
+validation, the advisor declines and the heuristic answers instead.
+
+## UC-15 — The dashboard renders the platform state
+
+```bash
+cd dashboard && npm ci && npm run build && cd ..
+docker compose --profile gateway up -d --build
+open http://localhost:8080          # or https://localhost:8443
+```
+
+Enter the admin key in the header field and press **Load**.
+
+**Pass criteria:** the dashboard loads, and the Platform / Grid intensity / Plant
+load / Dispatch schedule / AI Orchestrator panels populate from the API. Pressing
+**Run optimizer** and **Ask orchestrator** triggers real runs and refreshes the
+view. An invalid key shows the API's error message rather than a blank page.
+
+## UC-16 — Gateway terminates TLS and rate limits at the edge
+
+```bash
+curl -k -i https://localhost:8443/healthz              # TLS (self-signed)
+curl -i http://localhost:8080/api/v1/whoami -H "X-API-Key: $ADMIN_KEY"
+
+# Sustained burst far above the edge limit of 20 r/s:
+for i in $(seq 1 80); do
+  curl -s -o /dev/null -w "%{http_code} " -H "X-API-Key: $ADMIN_KEY" \
+    http://localhost:8080/api/v1/whoami
+done; echo
+```
+
+**Pass criteria:** `https://localhost:8443/healthz` returns **200** (the
+self-signed certificate is expected — `-k` suppresses the warning; replace
+`./certs` with real certificates for anything beyond local use). `/api` is proxied
+correctly, and a sustained burst returns **429** from nginx *in addition to* the
+API's own 120/min per-key limit. `/healthz` is proxied but **never** rate limited —
+throttling a healthcheck would let an orchestrator mark a healthy service as dead.
+
+## UC-17 — Migrations apply cleanly and match the models
+
+```bash
+export ECOGRID_POSTGRES_DSN=postgresql://ecogrid:…@localhost:15432/ecogrid
+alembic upgrade head          # on an empty database: creates all tables
+alembic current
+alembic revision --autogenerate -m "drift check"
+```
+
+**Pass criteria:** `alembic upgrade head` creates all eight tables, and a
+subsequent `--autogenerate` reports **no changes** — that is the proof the
+migration matches `ecogrid/models.py`. If it proposes a diff, the migration and
+the models have drifted and the new revision should be reviewed and applied.
+`alembic downgrade base` drops them again.
+
+---
+
 ## Automated coverage
 
 ```bash
-pytest -q                # 75 tests, no network/broker/DB required
-pytest -q test_phase3.py # Phase 3 only: 24 tests
+pytest -q                         # 92 tests, no network/broker/DB required
+pytest -q test_phase3.py          # Phase 3 only: 24 tests
+pytest -q test_ai_orchestrator.py # AI Orchestrator only: 17 tests
 ```
 
 | Area | Automated | Manual |
@@ -297,8 +384,13 @@ pytest -q test_phase3.py # Phase 3 only: 24 tests
 | Auth / RBAC / rate limit | ✅ | UC-3, UC-4, UC-5 |
 | Plant contract + sources | ✅ | UC-7, UC-8 |
 | Solver correctness + carbon maths | ✅ | UC-9, UC-10 |
+| Advisor rules + Claude fallback | ✅ | UC-13, UC-14 |
+| MLflow / JSONL tracking | ✅ | UC-13 |
 | Kafka/DB wiring as containers | ❌ | UC-0, UC-2, UC-7, UC-8 |
 | Databricks integration | ❌ (seam only) | UC-12 |
+| Dashboard rendering | ❌ (build verified) | UC-15 |
+| Gateway TLS + edge rate limiting | ❌ | UC-16 |
+| Alembic migrations | ❌ (import verified) | UC-17 |
 
 ---
 

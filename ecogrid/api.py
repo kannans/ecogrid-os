@@ -42,14 +42,17 @@ from ecogrid.models import (
     GridTelemetryRow,
     IngestAudit,
     OptimizationRunRow,
+    OrchestratorAdviceRow,
     PlantTelemetryRow,
     ScheduleDecisionRow,
 )
 from ecogrid.ratelimit import RateLimiter
 from ecogrid.schemas import (
+    AdviceOut,
     HealthOut,
     OptimizeRunResponse,
     OptimizationRunOut,
+    OrchestratorRunResponse,
     Page,
     PlantOut,
     PrincipalOut,
@@ -746,6 +749,86 @@ async def trigger_optimization(principal: OperatorDep) -> OptimizeRunResponse:
         unscheduled=list(plan.unscheduled),
         notes=list(plan.notes),
         status="ok" if plan.decisions else "skipped",
+    )
+
+
+@api_router.get(
+    "/orchestrator/latest",
+    response_model=AdviceOut,
+    tags=["orchestrator"],
+    summary="Most recent AI Orchestrator recommendation",
+)
+async def latest_advice(principal: ViewerDep, session: SessionDep) -> AdviceOut:
+    """Latest advice. Check ``source`` — ``heuristic`` means no model was used."""
+    row = (
+        await session.scalars(
+            select(OrchestratorAdviceRow)
+            .order_by(OrchestratorAdviceRow.id.desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="the orchestrator has not produced any advice yet",
+        )
+    return AdviceOut.model_validate(row)
+
+
+@api_router.get(
+    "/orchestrator/advice",
+    response_model=list[AdviceOut],
+    tags=["orchestrator"],
+    summary="Recent advice history (newest first)",
+)
+async def list_advice(
+    principal: ViewerDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+) -> list[AdviceOut]:
+    rows = list(
+        (
+            await session.execute(
+                select(OrchestratorAdviceRow)
+                .order_by(OrchestratorAdviceRow.id.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [AdviceOut.model_validate(row) for row in rows]
+
+
+@api_router.post(
+    "/orchestrator/run",
+    response_model=OrchestratorRunResponse,
+    tags=["orchestrator"],
+    summary="Trigger an orchestrator pass now (operator or admin)",
+)
+async def trigger_orchestrator(principal: OperatorDep) -> OrchestratorRunResponse:
+    """Ask the orchestrator for a recommendation on the current state.
+
+    Falls back to the deterministic heuristic advisor when no Anthropic key is
+    configured or the model call fails — ``source`` in the response says which
+    one answered.
+    """
+    from ecogrid.orchestrator.loop import run_once
+
+    result = await run_once(state.session_factory, settings)
+    advice = result.advice
+    run_id = (result.context.get("plan") or {}).get("run_id")
+
+    return OrchestratorRunResponse(
+        run_id=run_id,
+        source=advice.source,
+        headline=advice.headline,
+        rationale=advice.rationale,
+        confidence=advice.confidence,
+        recommended_actions=list(advice.recommended_actions),
+        risk_flags=list(advice.risk_flags),
+        published=result.published,
+        status="ok",
     )
 
 
