@@ -51,6 +51,29 @@ docker compose ps
 exited `0`; `consumer`, `api`, `plant-bridge`, `plant-consumer`, `optimizer` are
 `running`.
 
+> ### ✅ CONFIRMED — Phase 2 (2026-09-15)
+>
+> Observed on a real Docker host:
+>
+> ```
+> ecogrid-api        … Up (health: starting)   127.0.0.1:8000->8000/tcp
+> ecogrid-consumer   … Up (health: starting)   8000/tcp
+> ecogrid-kafka      … Up 2 hours (healthy)    127.0.0.1:9092->9092/tcp
+> ecogrid-postgres   … Up 2 hours (healthy)    127.0.0.1:15432->5432/tcp
+> ecogrid-redis      … Up 2 hours (healthy)    127.0.0.1:16379->6379/tcp
+> ```
+>
+> Notes on reading that output:
+> * **`migrate` is absent because it exited 0** — it is a one-shot, not a service.
+>   The real proof is that `consumer` and `api` started at all: both declare
+>   `depends_on: migrate: condition: service_completed_successfully`, so they could
+>   only come up if `migrate` completed. This is what the compose `command` fix
+>   bought us.
+> * `health: starting` is expected — the api has a 20s `start_period` and the
+>   consumer 30s. Re-run `docker compose ps` after ~30s to see them `healthy`.
+> * The `phase3` / `ai` / `gateway` services were **not** started in that run, so
+>   UC-7 through UC-17 remain unexecuted.
+
 ---
 
 ## UC-1 — Grid telemetry is ingested and deduplicated (Phase 1)

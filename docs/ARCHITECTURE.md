@@ -185,9 +185,10 @@ The FastAPI service consumes the stream and must uphold:
 
 ## 7. Deferred decisions
 
-| Decision | Why deferred |
-|---|---|
-| Schema registry (Avro/Protobuf) | JSON + `schema_version` is sufficient for one producer and one consumer. Revisit when a third producer appears. |
-| Kafka SASL/TLS | The broker is bound to `127.0.0.1` and only reachable on the Compose bridge. Add SASL before any non-local deployment. |
-| Multi-broker replication | Replication factors are pinned to 1. Raising them requires ≥3 brokers; do it with the production topology, not before. |
-| Dead-letter topic consumption | `ecogrid.telemetry.carbon.dlq` is provisioned but unconsumed. The worker's own spool currently handles redelivery; a DLQ consumer becomes necessary when a *consumer* starts failing, not a producer. |
+| Decision | Status | Why |
+|---|---|---|
+| Schema registry (Avro/Protobuf) | ⏳ Deferred | JSON + `schema_version` is sufficient for one producer and one consumer. Revisit when a third producer appears. |
+| TLS — client → platform | ✅ **Done** | Terminated at the nginx edge gateway (`--profile gateway`), which also serves the dashboard and applies per-IP rate limiting. |
+| SASL — client → **broker** | ⏳ Open | The broker is only reachable on the Compose bridge. TLS now covers client→gateway, but **broker-side SASL is still not enabled** and is required before any non-local deployment. Do not treat the gateway's TLS as covering this hop. |
+| Multi-broker replication | ⏳ Open | Replication factors are pinned to 1. Raising them requires ≥3 brokers and an HA topology override; planned, not built. |
+| Dead-letter topic consumption | ⏳ Open | `ecogrid.telemetry.carbon.dlq` is provisioned but unconsumed. The worker's spool handles producer-side redelivery; a DLQ consumer matters once a *consumer* starts failing. |

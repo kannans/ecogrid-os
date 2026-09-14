@@ -34,10 +34,16 @@ operations, AI orchestration, and an operator dashboard behind an edge gateway.
 > service inherited the image's default `consumer` command) was corrected, so each
 > platform service now runs its own command.
 >
-> **Still to be executed on a Docker host:** the live
-> `docker compose --profile platform up -d` and `--profile phase3 up -d`
-> bring-ups — this sandbox has no Docker daemon. Step-by-step procedures for
-> proving every use case are in **[`docs/VERIFICATION.md`](docs/VERIFICATION.md)**.
+> **Confirmed on a real Docker host (2026-09-15).** The Phase 2 platform stack was
+> brought up with `docker compose --profile platform up -d`: `postgres`, `redis`
+> and `kafka` reached `healthy`, and **both `consumer` and `api` came up** — which
+> is itself the proof the `migrate` fix worked, since both gate on `migrate`
+> reaching `service_completed_successfully`. ✅ **UC-0 (Phase 2) verified.**
+>
+> **Not yet brought up:** `--profile phase3` (plant bridge / consumer / optimizer),
+> `--profile ai` (orchestrator) and `--profile gateway` (nginx + TLS + dashboard).
+> Step-by-step procedures for proving every use case are in
+> **[`docs/VERIFICATION.md`](docs/VERIFICATION.md)**.
 
 ---
 
@@ -405,23 +411,21 @@ These behaviours were exercised end-to-end, not inferred from the code:
 
 ### Known gaps
 
-- **No long soak test.** The longest continuous run was 5 cycles at a 30s
-  cadence. The 300s production cadence has not been left running for hours, so
-  slow leaks (dedupe-cache growth, connection-pool exhaustion, file-descriptor
-  drift) remain untested.
-- **Single broker, no cluster-level fault injection.** Broker *availability*
-  was tested (stop/start mid-run). Broker *degradation* — leader elections,
-  ISR shrinkage, disk-full — was not, and would need a multi-node cluster.
-- **Consumer/API not yet soaked as Compose containers.** The consumer and API
-  were exercised live from the venv for a bounded run (26 messages → 2 ledger
-  rows, 22 duplicates suppressed, 2 revisions; per-partition audit reconciles to
-  26; API passed auth / RBAC / rate-limit / 404 / 429 checks). The remaining
-  validation is a full `docker compose --profile platform up -d` bring-up of the
-  migrate / consumer / api containers and a multi-hour soak at the 300s cadence.
-- **Single broker, no cluster-level fault injection under a live consumer.**
-  Broker *availability* was tested at the producer (stop/start mid-run). Leader
-  elections, ISR shrinkage, and disk-full behaviour with a running consumer would
-  need a multi-node cluster.
+- **No long soak test at the 300s production cadence.** ✅ The Phase 2 stack is
+  confirmed to *boot and run* as containers (postgres/redis/kafka `healthy`,
+  consumer + api up), and a bounded live run behaved correctly (26 messages → 2
+  ledger rows, 22 duplicates suppressed, 2 revisions; per-partition audit
+  reconciles to 26; API passed auth / RBAC / rate-limit / 404 / 429 checks).
+  Still untested is hours of continuous running, so slow leaks (dedupe-cache
+  growth, connection-pool exhaustion, file-descriptor drift) remain unverified.
+- **Phase 3 / AI / gateway services not yet brought up as containers.** The
+  `phase3` (plant bridge / consumer / optimizer), `ai` (orchestrator) and
+  `gateway` (nginx + TLS + dashboard) profiles have not been started on a Docker
+  host. Their behaviour is covered by unit tests, the dashboard build and the
+  migration import check — not by a live run.
+- **Single broker, no cluster-level fault injection.** Broker *availability* was
+  tested (stop/start mid-run). Broker *degradation* — leader elections, ISR
+  shrinkage, disk-full — was not, and would need a multi-node cluster.
 
 **Liveness.** The worker touches `ECOGRID_HEARTBEAT_PATH` after every
 successful cycle. The container healthcheck marks it unhealthy after 3 missed
@@ -602,14 +606,12 @@ ecogrid-os/
 
 - **Phase 1 (done)** — grid ingestion + event backbone: `docker compose up -d`,
   `ingest_grid.py` publishes to `ecogrid.telemetry.carbon` with dedupe + spool.
-- **Phase 2 (built & verified; live container soak pending)** — Platform Core:
+- **Phase 2 (done — container bring-up ✅ CONFIRMED)** — Platform Core:
   `ecogrid.consumer` idempotent upsert + audit ledger + DLQ, Redis hot-read cache,
   FastAPI read API with API-key auth / RBAC / rate limiting / append-only audit.
-  Code, compose wiring, and the `ecogrid/platform-core:phase3` image are complete
-  and pass the automated suite (75 tests); the only open step is a full
-  `docker compose --profile platform up -d --build` bring-up, which needs a Docker
-  host (not available in this sandbox).
-- **Phase 3 (built & verified; live container soak pending)** — Plant Operations &
+  Brought up on a real Docker host: `postgres`/`redis`/`kafka` healthy and both
+  `consumer` and `api` running. Remaining: a multi-hour soak at the 300s cadence.
+- **Phase 3 (built & verified; live container bring-up pending)** — Plant Operations &
   Optimization: AS400/legacy plant bridge (simulated · file · odbc seam),
   `ecogrid.plant.consumer` idempotent persistence, and the carbon-arbitrage
   optimizer (Databricks when configured, local greedy solver otherwise) publishing
