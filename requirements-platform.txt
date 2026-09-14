@@ -1,0 +1,23 @@
+# EcoGrid OS — Phase 2 Platform Core (consumer + API)
+#
+# Layered on the Phase 1 base so the shared contract dependencies (pydantic,
+# aiokafka) resolve identically in both processes. The ingestion worker's own
+# image installs only `requirements.txt` and stays slim.
+#
+#   pip install -r requirements-platform.txt
+
+-r requirements.txt
+
+# --- HTTP service ---
+fastapi==0.115.0
+uvicorn[standard]==0.31.1
+
+# --- PostgreSQL (async) ---
+SQLAlchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+
+# --- Redis (async) ---
+redis==5.1.1
+
+# --- Test tooling for the API surface ---
+httpx==0.27.2

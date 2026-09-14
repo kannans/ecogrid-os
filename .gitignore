@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.pytest_tmp/
+*.egg-info/
+
+# Local secrets & config
+.env
+
+# Runtime state produced by the ingestion worker
+data/spool/*.jsonl
+data/spool/*.tmp
+data/heartbeat
+
+# OS noise
+.DS_Store
+
+# Tooling caches
+.ruff_cache/

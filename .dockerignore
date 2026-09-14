@@ -1,0 +1,18 @@
+# Keep the build context minimal — only what the image needs.
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+.pytest_cache
+*.pyc
+.env
+data
+docs
+test_ingest_grid.py
+pytest.ini
+README.md
+docker-compose.yml
+Dockerfile
+.dockerignore

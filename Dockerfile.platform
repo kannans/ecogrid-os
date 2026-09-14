@@ -1,0 +1,35 @@
+# EcoGrid OS — Phase 2 Platform Core image (Kafka consumer + FastAPI service)
+# One image, two commands: `python -m ecogrid.consumer` and `uvicorn ecogrid.api:app`.
+
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# asyncpg ships manylinux wheels, but libpq is still needed for psql-based
+# debugging inside the container; curl is used by healthchecks.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Dependency layer first so source edits do not invalidate the pip cache.
+COPY requirements.txt requirements-platform.txt ./
+RUN pip install --no-cache-dir -r requirements-platform.txt
+
+# Phase 1 contract model (ingest_grid.py) is imported by the consumer so the
+# schema has exactly one definition; ecogrid/ is the Phase 2 platform package.
+COPY ingest_grid.py ./
+COPY ecogrid ./ecogrid
+
+RUN useradd --create-home --uid 10002 --shell /usr/sbin/nologin ecogrid \
+ && chown -R ecogrid:ecogrid /app
+USER ecogrid
+
+EXPOSE 8000
+
+# Overridden per service in docker-compose.yml.
+CMD ["python", "-m", "ecogrid.consumer"]

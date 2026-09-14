@@ -1,0 +1,315 @@
+# EcoGrid OS — Phase 1 infrastructure
+# PostgreSQL 15 (system state + audit) · Redis 7 (session cache) · Apache Kafka 3.x (KRaft, event spine)
+#
+#   docker compose up -d
+#   docker compose --profile worker up -d --build     # also run the ingestion worker
+#   docker compose logs -f kafka-init                 # confirm topic bootstrap
+#
+# All services share the `ecogrid-net` bridge and publish ports on localhost only.
+#
+# Host ports are parameterised because developer machines frequently already run
+# native Redis/PostgreSQL on 6379/5432. Override them in `.env` — e.g.
+# POSTGRES_HOST_PORT=15432 — without touching the service's internal port.
+
+name: ecogrid-os
+
+x-kafka-common: &kafka-common
+  image: confluentinc/cp-kafka:7.6.1
+  restart: unless-stopped
+  networks:
+    - ecogrid-net
+
+# Phase 2 Platform Core: one image, three commands (migrate / consumer / api).
+x-platform-common: &platform-common
+  image: ecogrid/platform-core:phase2
+  build:
+    context: .
+    dockerfile: Dockerfile.platform
+  restart: unless-stopped
+  networks:
+    - ecogrid-net
+  environment: &platform-env
+    # In-network hostnames — NOT the host-mapped ports in .env.
+    ECOGRID_POSTGRES_DSN: "postgresql+asyncpg://${POSTGRES_USER:-ecogrid}:${POSTGRES_PASSWORD:-ecogrid_dev_password}@postgres:5432/${POSTGRES_DB:-ecogrid}"
+    ECOGRID_REDIS_URL: "redis://redis:6379/0"
+    ECOGRID_KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+    ECOGRID_KAFKA_TOPIC: "${KAFKA_TELEMETRY_TOPIC:-ecogrid.telemetry.carbon}"
+    ECOGRID_KAFKA_CONSUMER_GROUP: "${KAFKA_CONSUMER_GROUP:-ecogrid-platform-core}"
+    ECOGRID_LOG_LEVEL: "INFO"
+    ECOGRID_RATE_LIMIT_REQUESTS: "${API_RATE_LIMIT_REQUESTS:-120}"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — durable system state, RBAC, and the immutable audit ledger
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: ecogrid-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ecogrid}
+      POSTGRES_USER: ${POSTGRES_USER:-ecogrid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ecogrid_dev_password}
+      # Deterministic collation keeps index ordering stable across hosts.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ecogrid-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ecogrid} -d ${POSTGRES_DB:-ecogrid}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "log_min_duration_statement=500"
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — session cache, rate-limit counters, hot telemetry read cache
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: ecogrid-redis
+    restart: unless-stopped
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
+      - "--maxmemory"
+      - "512mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ecogrid-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Apache Kafka — KRaft mode (no ZooKeeper). Combined broker + controller node.
+  #   In-network clients  : kafka:29092
+  #   Host machine clients: localhost:9092
+  # ---------------------------------------------------------------------------
+  kafka:
+    <<: *kafka-common
+    hostname: kafka
+    container_name: ecogrid-kafka
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      # --- KRaft identity / quorum ---
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      # --- Listeners ---
+      KAFKA_LISTENERS: "PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092"
+      # NOTE: the host listener's port must match the published port below,
+      # otherwise clients receive unreachable broker metadata on first fetch.
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-9092}"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      # --- Single-node replication (scale these out with the broker count) ---
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      # Topics are provisioned explicitly by `kafka-init`; never auto-created.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      # --- Throughput / latency tuning ---
+      KAFKA_NUM_NETWORK_THREADS: 4
+      KAFKA_NUM_IO_THREADS: 8
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 102400
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 102400
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 104857600
+      KAFKA_LOG_FLUSH_INTERVAL_MESSAGES: 10000
+      KAFKA_GROUP_MIN_SESSION_TIMEOUT_MS: 6000
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      # Probe the INTERNAL listener (kafka:29092), not localhost:29092 — the
+      # PLAINTEXT listener is bound to the `kafka` hostname, so inside the
+      # container localhost:29092 refuses connections while kafka:29092 answers.
+      test:
+        - "CMD-SHELL"
+        - "kafka-broker-api-versions --bootstrap-server kafka:29092 >/dev/null 2>&1 || exit 1"
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
+
+  # ---------------------------------------------------------------------------
+  # One-shot topic provisioner — idempotent, runs after the broker is healthy.
+  # `cleanup.policy=compact,delete` keeps the latest state per window key while
+  # still ageing out cold history.
+  # ---------------------------------------------------------------------------
+  kafka-init:
+    <<: *kafka-common
+    container_name: ecogrid-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "[kafka-init] provisioning topics..."
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+          --topic "${KAFKA_TELEMETRY_TOPIC:-ecogrid.telemetry.carbon}" \
+          --partitions 3 --replication-factor 1 \
+          --config cleanup.policy=compact,delete \
+          --config retention.ms=604800000 \
+          --config min.insync.replicas=1
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+          --topic "${KAFKA_DLQ_TOPIC:-ecogrid.telemetry.carbon.dlq}" \
+          --partitions 1 --replication-factor 1 \
+          --config retention.ms=1209600000
+        kafka-topics --bootstrap-server kafka:29092 --describe \
+          --topic "${KAFKA_TELEMETRY_TOPIC:-ecogrid.telemetry.carbon}"
+        echo "[kafka-init] done."
+
+  # ---------------------------------------------------------------------------
+  # Grid ingestion worker (opt-in: --profile worker). Polls the UK Carbon
+  # Intensity API every 300s and streams merged telemetry into Kafka.
+  # ---------------------------------------------------------------------------
+  ingestor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ecogrid/grid-ingestor:phase1
+    container_name: ecogrid-ingestor
+    profiles: ["worker"]
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      ECOGRID_KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      ECOGRID_KAFKA_TOPIC: "${KAFKA_TELEMETRY_TOPIC:-ecogrid.telemetry.carbon}"
+      ECOGRID_POLL_INTERVAL_SECONDS: "300"
+      ECOGRID_LOG_LEVEL: "INFO"
+      ECOGRID_SPOOL_PATH: "/app/data/spool/telemetry-spool.jsonl"
+      ECOGRID_HEARTBEAT_PATH: "/app/data/heartbeat"
+      ECOGRID_REDIS_URL: "redis://redis:6379/0"
+      ECOGRID_POSTGRES_DSN: "postgresql://${POSTGRES_USER:-ecogrid}:${POSTGRES_PASSWORD:-ecogrid_dev_password}@postgres:5432/${POSTGRES_DB:-ecogrid}"
+    volumes:
+      - ./data:/app/data
+    networks:
+      - ecogrid-net
+
+  # ---------------------------------------------------------------------------
+  # Phase 2 — schema bootstrap. One-shot and idempotent; the consumer and API
+  # both gate on `service_completed_successfully` so tables always exist first.
+  # ---------------------------------------------------------------------------
+  migrate:
+    <<: *platform-common
+    container_name: ecogrid-migrate
+    profiles: ["platform"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *platform-env
+      # Optional fixed bootstrap key. If unset, `migrate` generates one and
+      # prints it exactly once.
+      ECOGRID_BOOTSTRAP_ADMIN_KEY: "${ECOGRID_BOOTSTRAP_ADMIN_KEY:-}"
+
+  # ---------------------------------------------------------------------------
+  # Phase 2 — telemetry consumer. Kafka → PostgreSQL (idempotent upsert on
+  # window_from) → Redis hot cache. Offsets are committed only after the
+  # database accepts the write.
+  # ---------------------------------------------------------------------------
+  consumer:
+    <<: *platform-common
+    container_name: ecogrid-consumer
+    profiles: ["platform"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # The consumer has no HTTP surface; liveness is proven by a live process
+      # plus a responsive database, which is what actually stalls in practice.
+      test: ["CMD-SHELL", "pgrep -f 'ecogrid.consumer' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Phase 2 — read API. Authenticated, RBAC-enforced, rate limited, audited.
+  # ---------------------------------------------------------------------------
+  api:
+    <<: *platform-common
+    container_name: ecogrid-api
+    profiles: ["platform"]
+    command:
+      - "uvicorn"
+      - "ecogrid.api:app"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--no-access-log"
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  ecogrid-net:
+    name: ecogrid-net
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: ecogrid-postgres-data
+  redis_data:
+    name: ecogrid-redis-data
+  kafka_data:
+    name: ecogrid-kafka-data

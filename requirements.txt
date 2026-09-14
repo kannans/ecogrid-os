@@ -1,0 +1,22 @@
+# EcoGrid OS — Phase 1 ingestion worker
+# Python 3.11+  ·  install:  pip install -r requirements.txt
+#
+# Pin exact versions: the telemetry contract is a data-integrity boundary and
+# a silent minor bump in a serialisation or HTTP library must not change it.
+
+# --- HTTP client (async, HTTP/2-capable, connection pooling + timeouts) ---
+httpx[http2]==0.27.2
+
+# --- Schema validation & settings ---
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# --- Kafka producer (asyncio-native, idempotent writes) ---
+# 0.14.0 ships prebuilt wheels for CPython 3.11-3.13; earlier releases are
+# sdist-only for 3.13 and force a source build (needs a compiler in the image).
+aiokafka==0.14.0
+
+# --- Test / local tooling (optional; comment out for slim production images) ---
+pytest==8.3.3
+pytest-asyncio==0.24.0
+respx==0.21.1
