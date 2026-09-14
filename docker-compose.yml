@@ -19,9 +19,10 @@ x-kafka-common: &kafka-common
   networks:
     - ecogrid-net
 
-# Phase 2 Platform Core: one image, three commands (migrate / consumer / api).
+# Platform Core image: one build, five commands (migrate / consumer / api /
+# plant-bridge / plant-consumer / optimizer).
 x-platform-common: &platform-common
-  image: ecogrid/platform-core:phase2
+  image: ecogrid/platform-core:phase3
   build:
     context: .
     dockerfile: Dockerfile.platform
@@ -188,6 +189,21 @@ services:
           --topic "${KAFKA_DLQ_TOPIC:-ecogrid.telemetry.carbon.dlq}" \
           --partitions 1 --replication-factor 1 \
           --config retention.ms=1209600000
+        # --- Phase 3 topics -------------------------------------------------
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+          --topic "${KAFKA_PLANT_TOPIC:-ecogrid.telemetry.plant}" \
+          --partitions 3 --replication-factor 1 \
+          --config cleanup.policy=compact,delete \
+          --config retention.ms=604800000
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+          --topic "${KAFKA_PLANT_DLQ_TOPIC:-ecogrid.telemetry.plant.dlq}" \
+          --partitions 1 --replication-factor 1 \
+          --config retention.ms=1209600000
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+          --topic "${KAFKA_DECISIONS_TOPIC:-ecogrid.decisions.schedule}" \
+          --partitions 1 --replication-factor 1 \
+          --config cleanup.policy=compact,delete \
+          --config retention.ms=604800000
         kafka-topics --bootstrap-server kafka:29092 --describe \
           --topic "${KAFKA_TELEMETRY_TOPIC:-ecogrid.telemetry.carbon}"
         echo "[kafka-init] done."
@@ -234,6 +250,11 @@ services:
     container_name: ecogrid-migrate
     profiles: ["platform"]
     restart: "no"
+    # One-shot schema bootstrap. MUST run `ecogrid.migrate`, NOT the image's
+    # default CMD (which is the consumer) — otherwise this container would start
+    # the consumer and never exit, blocking consumer/api which wait on
+    # `service_completed_successfully`.
+    command: ["python", "-m", "ecogrid.migrate"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -252,6 +273,7 @@ services:
     <<: *platform-common
     container_name: ecogrid-consumer
     profiles: ["platform"]
+    command: ["python", "-m", "ecogrid.consumer"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -300,6 +322,94 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Phase 3 — AS400 / legacy plant-operations bridge. Polls plant load and
+  # publishes to ecogrid.telemetry.plant. Swap ECOGRID_PLANT_SOURCE to `file` or
+  # `odbc` to read real AS400 exports / a live DSN.
+  # ---------------------------------------------------------------------------
+  plant-bridge:
+    <<: *platform-common
+    container_name: ecogrid-plant-bridge
+    profiles: ["phase3"]
+    command: ["python", "-m", "ecogrid.plant.bridge"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *platform-env
+      ECOGRID_PLANT_SOURCE: "${ECOGRID_PLANT_SOURCE:-simulated}"
+      ECOGRID_PLANT_IDS: "${ECOGRID_PLANT_IDS:-plant-01}"
+      ECOGRID_PLANT_BASE_LOAD_MW: "${ECOGRID_PLANT_BASE_LOAD_MW:-40}"
+      ECOGRID_PLANT_FLEXIBLE_FRACTION: "${ECOGRID_PLANT_FLEXIBLE_FRACTION:-0.35}"
+      ECOGRID_PLANT_POLL_INTERVAL_SECONDS: "${ECOGRID_PLANT_POLL_INTERVAL_SECONDS:-300}"
+      ECOGRID_PLANT_SPOOL_PATH: "/app/data/spool/plant-spool.jsonl"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'ecogrid.plant.bridge' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Phase 3 — plant telemetry consumer. ecogrid.telemetry.plant → PostgreSQL,
+  # idempotent upsert on (plant_id, window_from).
+  # ---------------------------------------------------------------------------
+  plant-consumer:
+    <<: *platform-common
+    container_name: ecogrid-plant-consumer
+    profiles: ["phase3"]
+    command: ["python", "-m", "ecogrid.plant.consumer"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'ecogrid.plant.consumer' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Phase 3 — Databricks optimization loop. Carbon forecast + plant flexibility
+  # → dispatch schedule → ecogrid.decisions.schedule.
+  # ---------------------------------------------------------------------------
+  optimizer:
+    <<: *platform-common
+    container_name: ecogrid-optimizer
+    profiles: ["phase3"]
+    command: ["python", "-m", "ecogrid.optimizer.loop"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *platform-env
+      ECOGRID_OPTIMIZER_HORIZON_WINDOWS: "${ECOGRID_OPTIMIZER_HORIZON_WINDOWS:-24}"
+      ECOGRID_OPTIMIZER_INTERVAL_SECONDS: "${ECOGRID_OPTIMIZER_INTERVAL_SECONDS:-900}"
+      # Databricks production path — leave unset to use the local solver.
+      ECOGRID_DATABRICKS_HOST: "${ECOGRID_DATABRICKS_HOST:-}"
+      ECOGRID_DATABRICKS_TOKEN: "${ECOGRID_DATABRICKS_TOKEN:-}"
+      ECOGRID_DATABRICKS_JOB_ID: "${ECOGRID_DATABRICKS_JOB_ID:-}"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'ecogrid.optimizer.loop' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 networks:
   ecogrid-net:

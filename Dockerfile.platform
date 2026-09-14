@@ -1,5 +1,8 @@
-# EcoGrid OS — Phase 2 Platform Core image (Kafka consumer + FastAPI service)
-# One image, two commands: `python -m ecogrid.consumer` and `uvicorn ecogrid.api:app`.
+# EcoGrid OS — Phase 2 Platform Core image (schema bootstrap + Kafka consumer + FastAPI)
+# One image, three commands selected per service in docker-compose.yml:
+#   migrate  : python -m ecogrid.migrate
+#   consumer : python -m ecogrid.consumer
+#   api      : uvicorn ecogrid.api:app
 
 FROM python:3.11-slim AS runtime
 
@@ -10,10 +13,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# asyncpg ships manylinux wheels, but libpq is still needed for psql-based
-# debugging inside the container; curl is used by healthchecks.
+# curl  → used by the API healthcheck (curl -fsS /healthz)
+# procps → provides `pgrep`, used by the consumer healthcheck
+# ca-certificates → TLS to the upstream grid API / PyPI
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
+ && apt-get install -y --no-install-recommends curl ca-certificates procps \
  && rm -rf /var/lib/apt/lists/*
 
 # Dependency layer first so source edits do not invalidate the pip cache.

@@ -75,6 +75,31 @@ class PlatformSettings(BaseSettings):
     rate_limit_requests: int = Field(default=120, ge=1)
     rate_limit_window_seconds: int = Field(default=60, ge=1)
 
+    # --- Phase 3: AS400 / legacy plant-operations bridge ---
+    kafka_plant_topic: str = "ecogrid.telemetry.plant"
+    kafka_decisions_topic: str = "ecogrid.decisions.schedule"
+    #: `simulated` (default, deterministic) | `file` (AS400 batch drop) | `odbc` (live AS400)
+    plant_source: str = "simulated"
+    #: Comma-separated plant identifiers the bridge reports for.
+    plant_ids: str = "plant-01"
+    plant_base_load_mw: float = Field(default=40.0, gt=0)
+    plant_flexible_fraction: float = Field(default=0.35, ge=0.0, le=1.0)
+    plant_file_dir: str = "./data/as400"
+    plant_poll_interval_seconds: int = Field(default=300, ge=30)
+    plant_spool_path: str = "./data/spool/plant-spool.jsonl"
+    plant_client_id: str = "ecogrid-plant-bridge"
+
+    # --- Phase 3: Databricks optimization loop ---
+    optimizer_horizon_windows: int = Field(default=24, ge=2, le=96)
+    optimizer_interval_seconds: int = Field(default=900, ge=30)
+    #: Optional JSON list overriding the default flexible-process portfolio.
+    optimizer_processes_json: str | None = None
+    optimizer_client_id: str = "ecogrid-optimizer"
+    #: Databricks production path. Left unset -> the loop uses the local solver.
+    databricks_host: str | None = None
+    databricks_token: str | None = None
+    databricks_job_id: str | None = None
+
     # --- Logging ---
     log_level: str = "INFO"
 

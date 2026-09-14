@@ -28,7 +28,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from redis.asyncio import Redis
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ecogrid import __version__
@@ -37,12 +37,24 @@ from ecogrid.cache import TelemetryCache
 from ecogrid.config import PlatformSettings
 from ecogrid.db import check_connectivity, create_engine, create_session_factory
 from ecogrid.logging_setup import configure_logging
-from ecogrid.models import AuditLog, GridTelemetryRow, IngestAudit
+from ecogrid.models import (
+    AuditLog,
+    GridTelemetryRow,
+    IngestAudit,
+    OptimizationRunRow,
+    PlantTelemetryRow,
+    ScheduleDecisionRow,
+)
 from ecogrid.ratelimit import RateLimiter
 from ecogrid.schemas import (
     HealthOut,
+    OptimizeRunResponse,
+    OptimizationRunOut,
     Page,
+    PlantOut,
     PrincipalOut,
+    ScheduleDecisionOut,
+    SchedulePlanOut,
     TelemetryOut,
     WindowStats,
 )
@@ -231,6 +243,7 @@ def require_role(minimum: Role) -> Any:
 
 
 ViewerDep = Annotated[Principal, Depends(require_role(Role.VIEWER))]
+OperatorDep = Annotated[Principal, Depends(require_role(Role.OPERATOR))]
 AdminDep = Annotated[Principal, Depends(require_role(Role.ADMIN))]
 
 
@@ -580,6 +593,160 @@ async def ingest_status(principal: ViewerDep, session: SessionDep) -> dict[str, 
             for r in rows
         ],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 — plant operations + optimisation
+# --------------------------------------------------------------------------- #
+
+
+def _newest_plant_subquery() -> Any:
+    """Newest window per plant — one plant may lag another by a window."""
+    return (
+        select(
+            PlantTelemetryRow.plant_id.label("plant_id"),
+            func.max(PlantTelemetryRow.window_from).label("newest"),
+        ).group_by(PlantTelemetryRow.plant_id)
+    ).subquery()
+
+
+@api_router.get(
+    "/plant/latest",
+    response_model=list[PlantOut],
+    tags=["plant"],
+    summary="Newest load reading for every plant",
+)
+async def latest_plant(principal: ViewerDep, session: SessionDep) -> list[PlantOut]:
+    newest = _newest_plant_subquery()
+    rows = list(
+        (
+            await session.execute(
+                select(PlantTelemetryRow).join(
+                    newest,
+                    and_(
+                        PlantTelemetryRow.plant_id == newest.c.plant_id,
+                        PlantTelemetryRow.window_from == newest.c.newest,
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="no plant telemetry has been consumed yet",
+        )
+    return [PlantOut.model_validate(row) for row in rows]
+
+
+@api_router.get(
+    "/plant",
+    response_model=Page[PlantOut],
+    tags=["plant"],
+    summary="Plant load history (keyset paginated, newest first)",
+)
+async def list_plant(
+    principal: ViewerDep,
+    session: SessionDep,
+    plant_id: Annotated[str | None, Query(description="Filter by plant")] = None,
+    before: Annotated[datetime | None, Query(description="Cursor: return windows older than this")] = None,
+    limit: Annotated[int | None, Query(ge=1, description="Page size")] = None,
+) -> Page[PlantOut]:
+    page_size = min(limit or settings.api_default_page_size, settings.api_max_page_size)
+
+    stmt = select(PlantTelemetryRow)
+    if plant_id is not None:
+        stmt = stmt.where(PlantTelemetryRow.plant_id == plant_id)
+    if before is not None:
+        stmt = stmt.where(PlantTelemetryRow.window_from < before)
+
+    rows = list(
+        (await session.execute(stmt.order_by(PlantTelemetryRow.window_from.desc()).limit(page_size)))
+        .scalars()
+        .all()
+    )
+    items = [PlantOut.model_validate(row) for row in rows]
+    next_cursor = rows[-1].window_from if len(rows) == page_size else None
+    return Page[PlantOut](items=items, count=len(items), next_cursor=next_cursor, total=None)
+
+
+@api_router.get(
+    "/schedule/latest",
+    response_model=SchedulePlanOut,
+    tags=["schedule"],
+    summary="Most recent optimisation run and its dispatch schedule",
+)
+async def latest_schedule(
+    principal: ViewerDep,
+    session: SessionDep,
+    action: Annotated[str | None, Query(description="Filter decisions: run | idle")] = None,
+) -> SchedulePlanOut:
+    run = (
+        await session.scalars(
+            select(OptimizationRunRow).order_by(OptimizationRunRow.created_at.desc()).limit(1)
+        )
+    ).first()
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="no optimisation run has been recorded yet",
+        )
+
+    stmt = select(ScheduleDecisionRow).where(ScheduleDecisionRow.run_id == run.run_id)
+    if action is not None:
+        stmt = stmt.where(ScheduleDecisionRow.action == action)
+    rows = list(
+        (
+            await session.execute(
+                stmt.order_by(ScheduleDecisionRow.window_from, ScheduleDecisionRow.process_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return SchedulePlanOut(
+        run=OptimizationRunOut.model_validate(run),
+        count=len(rows),
+        decisions=[ScheduleDecisionOut.model_validate(row) for row in rows],
+    )
+
+
+@api_router.post(
+    "/optimize/run",
+    response_model=OptimizeRunResponse,
+    tags=["schedule"],
+    summary="Trigger an optimisation run now (operator or admin)",
+)
+async def trigger_optimization(principal: OperatorDep) -> OptimizeRunResponse:
+    """Run the optimiser on demand and persist the resulting schedule.
+
+    The run is durable immediately. Publishing to ``ecogrid.decisions.schedule``
+    is left to the optimizer service, which holds the Kafka producer — the API
+    stays a read/trigger surface and owns no producer of its own.
+    """
+    from ecogrid.optimizer.loop import build_plan, load_processes, persist_plan
+
+    processes = load_processes(settings)
+    plan = await build_plan(state.session_factory, settings)
+    if plan.decisions:
+        await persist_plan(state.session_factory, plan, len(processes))
+
+    return OptimizeRunResponse(
+        run_id=plan.run_id,
+        solver=plan.solver,
+        horizon_windows=plan.horizon_windows,
+        process_count=len(processes),
+        decision_count=len(plan.decisions),
+        baseline_carbon_kg=round(plan.baseline_carbon_kg, 3),
+        optimized_carbon_kg=round(plan.optimized_carbon_kg, 3),
+        carbon_saved_kg=round(plan.carbon_saved_kg, 3),
+        saving_pct=round(plan.saving_pct, 2),
+        unscheduled=list(plan.unscheduled),
+        notes=list(plan.notes),
+        status="ok" if plan.decisions else "skipped",
+    )
 
 
 # Mount the versioned router LAST — see the note at its definition.

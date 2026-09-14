@@ -177,3 +177,120 @@ class AuditLog(Base):
         Index("ix_audit_log_occurred_at_desc", occurred_at.desc()),
         Index("ix_audit_log_actor", "actor_name"),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 — plant operations + the optimisation loop
+# --------------------------------------------------------------------------- #
+
+
+class PlantTelemetryRow(Base):
+    """Plant electrical load per (plant, window).
+
+    Keyed on ``(plant_id, window_from)`` — the same natural key the bridge puts on
+    the Kafka message — so the consumer's upsert is idempotent under the
+    at-least-once contract.
+    """
+
+    __tablename__ = "plant_telemetry"
+
+    plant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    window_to: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    plant_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+
+    total_load_mw: Mapped[float] = mapped_column(Float, nullable=False)
+    flexible_load_mw: Mapped[float] = mapped_column(Float, nullable=False)
+    inflexible_load_mw: Mapped[float] = mapped_column(Float, nullable=False)
+
+    process_states: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    unit: Mapped[str] = mapped_column(String(16), nullable=False, default="MW")
+    #: True when the figure is an AS400 estimate rather than a metered read.
+    is_estimate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    revision_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        Index("ix_plant_telemetry_window_from_desc", window_from.desc()),
+        Index("ix_plant_telemetry_plant", "plant_id"),
+    )
+
+
+class OptimizationRunRow(Base):
+    """One execution of the optimisation loop.
+
+    Runs are immutable: each invocation gets a new ``run_id``. That makes the
+    schedule a decision record you can audit later — "what did we decide, and
+    why?" — rather than mutable state with no history.
+    """
+
+    __tablename__ = "optimization_runs"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    horizon_windows: Mapped[int] = mapped_column(Integer, nullable=False)
+    solver: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    baseline_carbon_kg: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    optimized_carbon_kg: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    carbon_saved_kg: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    process_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    decision_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Processes that could not be placed, and any solver notes.
+    unscheduled: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    notes: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+
+    __table_args__ = (Index("ix_optimization_runs_created_at_desc", created_at.desc()),)
+
+
+class ScheduleDecisionRow(Base):
+    """One process × one window decision belonging to an :class:`OptimizationRunRow`."""
+
+    __tablename__ = "schedule_decisions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    process_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    process_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+
+    window_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_to: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    #: ``run`` | ``idle``
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    load_mw: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    intensity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    carbon_kg: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    baseline_carbon_kg: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    carbon_saved_kg: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # Re-running the same run_id must not duplicate the schedule.
+        UniqueConstraint("run_id", "process_id", "window_from", name="uq_schedule_decision"),
+        Index("ix_schedule_decisions_run", "run_id"),
+        Index("ix_schedule_decisions_window_from_desc", window_from.desc()),
+        Index("ix_schedule_decisions_action", "action"),
+    )

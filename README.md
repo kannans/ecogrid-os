@@ -2,10 +2,33 @@
 
 Autonomous industrial energy arbitrage & decarbonization platform.
 
-**Current milestone: Phase 1 — Real-Time Grid Ingestion & The Event Backbone.**
+**Current milestone: Phase 1 + 2 + 3 delivered.**
 
-This repository contains the local Dockerized infrastructure stack and the
-Python ingestion worker that streams UK National Grid telemetry into Kafka.
+- **Phase 1 — Real-Time Grid Ingestion & The Event Backbone** (this repository):
+  the local Dockerized infrastructure stack and the async Python ingestion
+  worker that streams UK National Grid telemetry into Kafka.
+- **Phase 2 — Platform Core** (also in this repository): a Kafka consumer that
+  persists telemetry into PostgreSQL with idempotent upserts + an audit ledger, a
+  Redis hot-read cache, a dead-letter path, and a FastAPI read API with API-key
+  auth, ranked RBAC, rate limiting, and an append-only audit log.
+- **Phase 3 — Plant Operations & Optimization** (also in this repository):
+  an AS400 / legacy plant bridge that streams industrial load onto the event
+  spine, plus a carbon-arbitrage optimization loop that schedules flexible load
+  into the cleanest windows and publishes the dispatch schedule.
+
+> **Verification status.** Phases 1–3 are implemented and pass **75 automated
+> tests** offline (no network, broker, or database required). Phases 1 and 2 were
+> additionally verified live against a running PostgreSQL 15 / Redis 7 / Kafka
+> (KRaft) stack: the worker published and deduped telemetry, the consumer upserted
+> with dedupe + audit reconciliation, and the FastAPI service passed auth / RBAC /
+> rate-limit / 404 / 429 checks. A compose wiring bug (the one-shot `migrate`
+> service inherited the image's default `consumer` command) was corrected, so each
+> platform service now runs its own command.
+>
+> **Still to be executed on a Docker host:** the live
+> `docker compose --profile platform up -d` and `--profile phase3 up -d`
+> bring-ups — this sandbox has no Docker daemon. Step-by-step procedures for
+> proving every use case are in **[`docs/VERIFICATION.md`](docs/VERIFICATION.md)**.
 
 ---
 
@@ -36,7 +59,7 @@ Python ingestion worker that streams UK National Grid telemetry into Kafka.
                          (Plant Operations)   (Optimization)   (UK Carbon Intensity API)
 ```
 
-### Phase 1 scope (what is built here)
+### Phase 1 scope — Real-Time Grid Ingestion & Event Backbone
 
 ```text
    ┌──────────────────────────────────────────────────────────────────┐
@@ -63,6 +86,58 @@ Python ingestion worker that streams UK National Grid telemetry into Kafka.
    state & audit              session cache            event spine :9092
 ```
 
+### Phase 2 scope — Platform Core (also built here)
+
+```text
+              topic: ecogrid.telemetry.carbon
+                          │
+                          ▼  consume (manual offset commit after DB write)
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  ecogrid.consumer (idempotent upsert on window_from)             │
+   │    • dedupe via INSERT … ON CONFLICT (window_from) DO UPDATE      │
+   │      WHERE payload_hash IS DISTINCT FROM EXCLUDED.payload_hash     │
+   │    • per-partition audit ledger (last_offset + counters)          │
+   │    • bad records → ecogrid.telemetry.carbon.dlq                   │
+   │    • Redis hot-read cache (newer-window-wins)                     │
+   └───────────┬───────────────────────────────┬─────────────────────┘
+               ▼                               ▼
+        PostgreSQL 15                     Redis 7
+        telemetry + audit ledger          hot-read cache
+
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  FastAPI  /api/v1   (API-key auth · RBAC · rate limit · audit)    │
+   │    /healthz  /whoami  /telemetry/latest  /telemetry (keyset)     │
+   │    /telemetry/stats  /telemetry/{window_from}                    │
+   │    /audit (admin)   /ingest-status                                │
+   └──────────────────────────────────────────────────────────────────┘
+```
+
+### Phase 3 scope — Plant Operations & Optimization
+
+```text
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  AS400 / IBM i  (legacy plant operations)                        │
+   │    sources: simulated · file (batch drop) · odbc (live DSN)      │
+   └───────────────────────────┬──────────────────────────────────────┘
+                               ▼  ecogrid.plant.bridge (poll 300s)
+                    topic: ecogrid.telemetry.plant
+                               │
+                               ▼  ecogrid.plant.consumer (idempotent upsert)
+                        PostgreSQL · plant_telemetry
+                               │
+   ┌───────────────────────────┴──────────────────────────────────────┐
+   │  Optimization loop                                               │
+   │    carbon forecast  ×  flexible capacity  →  dispatch schedule   │
+   │    Databricks job if configured, else local greedy solver        │
+   └───────────┬───────────────────────────────────┬──────────────────┘
+               ▼                                   ▼
+   PostgreSQL · optimization_runs          topic: ecogrid.decisions.schedule
+                schedule_decisions                 (plant control systems)
+               │
+               ▼
+   FastAPI  /api/v1/plant/latest · /plant · /schedule/latest · POST /optimize/run
+```
+
 ---
 
 ## 2. Quickstart
@@ -83,7 +158,56 @@ python ingest_grid.py
 # 3b. …or run it as a container alongside the stack
 docker compose --profile worker up -d --build
 docker compose logs -f ingestor
+
+# 3c. Bring up Platform Core (migrate → consumer → API) as containers
+docker compose --profile platform build
+docker compose --profile platform up -d
+docker compose logs -f migrate      # prints the bootstrap admin API key once
+docker compose logs -f consumer     # consumes ecogrid.telemetry.carbon
+docker compose logs -f api          # FastAPI on http://localhost:8000 (override via API_HOST_PORT)
+
+# Or run the Platform Core pieces on the host (needs a live PG/Redis/Kafka):
+python -m ecogrid.migrate          # applies schema, prints bootstrap admin key
+python -m ecogrid.consumer         # starts the idempotent consumer
+uvicorn ecogrid.api:app --port 8000
+
+# 3d. Bring up Phase 3 (plant bridge → plant consumer → optimizer)
+docker compose --profile phase3 up -d --build
+docker compose logs -f plant-bridge     # publishes ecogrid.telemetry.plant
+docker compose logs -f plant-consumer   # persists into plant_telemetry
+docker compose logs -f optimizer        # emits schedules to ecogrid.decisions.schedule
+
+# Or run the Phase 3 pieces on the host (needs a live PG/Redis/Kafka):
+python -m ecogrid.plant.bridge          # AS400 plant-operations bridge
+python -m ecogrid.plant.consumer        # plant telemetry consumer
+python -m ecogrid.optimizer.loop        # carbon-arbitrage optimization loop
 ```
+
+To **prove** each capability rather than just start it, follow the numbered use
+cases in [`docs/VERIFICATION.md`](docs/VERIFICATION.md) — each gives exact commands
+and explicit pass/fail criteria.
+
+### Managing API keys (RBAC)
+
+The bootstrap admin key printed by `migrate` is the only credential at first.
+Create scoped keys to exercise the viewer / operator roles:
+
+```bash
+# Inside the running stack (reuses the migrate service env + Postgres dependency)
+docker compose --profile platform run --rm --entrypoint python migrate \
+  -m ecogrid.keys create --name "dashboard-viewer" --role viewer
+
+# Or on the host with the same ECOGRID_* env the API uses:
+python -m ecogrid.keys create --name "dashboard-viewer" --role viewer
+python -m ecogrid.keys list
+python -m ecogrid.keys revoke --name "dashboard-viewer" --reason "offboarded"
+```
+
+Keys are stored as SHA-256 digests only; the raw value is shown once at creation
+and is never recoverable. Send it as the `X-API-Key` header. Role precedence:
+`viewer < operator < admin`.
+
+---
 
 Verify events are landing:
 
@@ -103,7 +227,8 @@ python ingest_grid.py --once --dry-run
 Run the offline contract tests (no network, no broker):
 
 ```bash
-pytest -q
+pytest -q                       # 75 tests across Phases 1-3; integration tests
+                                # requiring a live PostgreSQL auto-skip if unreachable
 ```
 
 ---
@@ -117,6 +242,12 @@ pytest -q
 | `kafka` | `confluentinc/cp-kafka:7.6.1` | `127.0.0.1:${KAFKA_HOST_PORT:-9092}` | Event stream spine (KRaft, no ZooKeeper) | `ecogrid-kafka-data` |
 | `kafka-init` | same as `kafka` | — | One-shot idempotent topic provisioner | — |
 | `ingestor` | local build | — | Grid telemetry worker (`--profile worker`) | `./data` |
+| `migrate` | `ecogrid/platform-core:phase3` | — | One-shot schema bootstrap + admin key (`--profile platform`) | — |
+| `consumer` | `ecogrid/platform-core:phase3` | — | Kafka → PostgreSQL idempotent upsert + Redis cache (`--profile platform`) | — |
+| `api` | `ecogrid/platform-core:phase3` | `127.0.0.1:${API_HOST_PORT:-8000}` | FastAPI read API: auth / RBAC / rate limit / audit (`--profile platform`) | — |
+| `plant-bridge` | `ecogrid/platform-core:phase3` | — | AS400 plant-operations bridge → `ecogrid.telemetry.plant` (`--profile phase3`) | `./data` |
+| `plant-consumer` | `ecogrid/platform-core:phase3` | — | Plant telemetry → PostgreSQL, idempotent on `(plant_id, window_from)` (`--profile phase3`) | — |
+| `optimizer` | `ecogrid/platform-core:phase3` | — | Carbon-arbitrage loop → `ecogrid.decisions.schedule` (`--profile phase3`) | — |
 
 **Host port collisions.** Dev machines frequently already run native
 PostgreSQL on 5432 and Redis on 6379, which makes `docker compose up` fail with
@@ -269,8 +400,16 @@ These behaviours were exercised end-to-end, not inferred from the code:
 - **Single broker, no cluster-level fault injection.** Broker *availability*
   was tested (stop/start mid-run). Broker *degradation* — leader elections,
   ISR shrinkage, disk-full — was not, and would need a multi-node cluster.
-- **No consumer yet.** Phase 2 will read this topic; the contract is documented
-  but nothing validates it in practice.
+- **Consumer/API not yet soaked as Compose containers.** The consumer and API
+  were exercised live from the venv for a bounded run (26 messages → 2 ledger
+  rows, 22 duplicates suppressed, 2 revisions; per-partition audit reconciles to
+  26; API passed auth / RBAC / rate-limit / 404 / 429 checks). The remaining
+  validation is a full `docker compose --profile platform up -d` bring-up of the
+  migrate / consumer / api containers and a multi-hour soak at the 300s cadence.
+- **Single broker, no cluster-level fault injection under a live consumer.**
+  Broker *availability* was tested at the producer (stop/start mid-run). Leader
+  elections, ISR shrinkage, and disk-full behaviour with a running consumer would
+  need a multi-node cluster.
 
 **Liveness.** The worker touches `ECOGRID_HEARTBEAT_PATH` after every
 successful cycle. The container healthcheck marks it unhealthy after 3 missed
@@ -305,6 +444,48 @@ All worker settings are read from `ECOGRID_*` environment variables (or a
 | `ECOGRID_PUBLISH_UNCHANGED_WINDOWS` | `false` | Disable dedupe to republish everything |
 | `ECOGRID_LOG_LEVEL` | `INFO` | |
 
+### Platform Core settings
+
+Read by `ecogrid.consumer`, `ecogrid.api`, and `ecogrid.migrate` under the same
+`ECOGRID_*` prefix (validated by `PlatformSettings`). The Compose `platform`
+profile already supplies the in-network infra hostnames — override these only to
+point at external services.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ECOGRID_POSTGRES_DSN` | _(required)_ | SQLAlchemy URL; `postgresql://` is rewritten to `postgresql+asyncpg://` |
+| `ECOGRID_REDIS_URL` | `redis://localhost:6379/0` | Hot-read cache + rate-limit counters |
+| `ECOGRID_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | `kafka:29092` inside Compose |
+| `ECOGRID_KAFKA_TOPIC` | `ecogrid.telemetry.carbon` | |
+| `ECOGRID_KAFKA_CONSUMER_GROUP` | `ecogrid-platform-core` | Group the consumer commits offsets under |
+| `ECOGRID_API_KEY_HEADER` | `X-API-Key` | Header carrying the API key |
+| `ECOGRID_BOOTSTRAP_ADMIN_KEY` | _(none)_ | Fixed admin key; if unset, `migrate` generates one and prints it once |
+| `ECOGRID_RATE_LIMIT_ENABLED` | `true` | Fail-open: a Redis outage lets requests through |
+| `ECOGRID_RATE_LIMIT_REQUESTS` | `120` | Max requests per `ECOGRID_RATE_LIMIT_WINDOW_SECONDS` (fixed window) |
+| `ECOGRID_RATE_LIMIT_WINDOW_SECONDS` | `60` | |
+
+### Phase 3 settings
+
+Read by `ecogrid.plant.bridge`, `ecogrid.plant.consumer`, and
+`ecogrid.optimizer.loop` (same `ECOGRID_*` prefix). The Compose `phase3` profile
+supplies sane defaults; override to point at real plant systems.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ECOGRID_KAFKA_PLANT_TOPIC` | `ecogrid.telemetry.plant` | Plant load events |
+| `ECOGRID_KAFKA_DECISIONS_TOPIC` | `ecogrid.decisions.schedule` | Published dispatch schedules |
+| `ECOGRID_PLANT_SOURCE` | `simulated` | `simulated` \| `file` \| `odbc` |
+| `ECOGRID_PLANT_IDS` | `plant-01` | Comma-separated plant identifiers |
+| `ECOGRID_PLANT_FILE_DIR` | `./data/as400` | Batch-drop directory for `source=file` |
+| `ECOGRID_PLANT_BASE_LOAD_MW` | `40` | Simulated plant size |
+| `ECOGRID_PLANT_FLEXIBLE_FRACTION` | `0.35` | Share of load the optimizer may move |
+| `ECOGRID_PLANT_POLL_INTERVAL_SECONDS` | `300` | Bridge cadence |
+| `ECOGRID_PLANT_SPOOL_PATH` | `./data/spool/plant-spool.jsonl` | Durability buffer |
+| `ECOGRID_OPTIMIZER_HORIZON_WINDOWS` | `24` | Windows considered (24 = 12 h) |
+| `ECOGRID_OPTIMIZER_INTERVAL_SECONDS` | `900` | Optimization cadence |
+| `ECOGRID_OPTIMIZER_PROCESSES_JSON` | _(none)_ | JSON portfolio; falls back to the built-in 3 processes |
+| `ECOGRID_DATABRICKS_HOST` / `_TOKEN` / `_JOB_ID` | _(none)_ | Set all three to run on Databricks; otherwise the local solver is used |
+
 **Why 300 seconds?** The upstream API publishes at half-hourly granularity, so
 a 5-minute cadence is ~6× oversampled — fast enough to catch revised forecasts
 and settle windows promptly, while staying comfortably inside the public rate
@@ -318,7 +499,7 @@ limit.
 # Tail worker logs (UTC timestamps, index + intensity per cycle)
 docker compose logs -f ingestor
 
-# Inspect consumer-group lag (once Phase 2 consumers exist)
+# Inspect consumer-group lag (Platform Core group: ${KAFKA_CONSUMER_GROUP:-ecogrid-platform-core})
 docker compose exec kafka kafka-consumer-groups --bootstrap-server kafka:29092 --all-groups --describe
 
 # Describe the telemetry topic
@@ -337,23 +518,61 @@ docker compose down -v
 
 ```text
 ecogrid-os/
-├── docker-compose.yml        # PostgreSQL 15 · Redis 7 · Kafka (KRaft) · topic init · worker
-├── Dockerfile                # Slim non-root image for the ingestion worker
-├── ingest_grid.py            # Phase 1 async ingestion worker (the deliverable)
-├── test_ingest_grid.py       # Offline contract + resilience tests
-├── requirements.txt          # Pinned dependencies (Python 3.11+)
-├── .env.example              # Configuration template
+├── docker-compose.yml        # PostgreSQL 15 · Redis 7 · Kafka (KRaft) · topic init
+│                           #   · ingestor (profile: worker) · migrate / consumer /
+│                           #     api (profile: platform)
+├── Dockerfile               # Slim non-root image for the ingestion worker
+├── Dockerfile.platform      # One image (ecogrid/platform-core:phase3); all services
+├── ingest_grid.py           # Phase 1 async ingestion worker
+├── ecogrid/                 # Platform Core package (Phases 2 + 3)
+│   ├── config.py           #   PlatformSettings (ECOGRID_*) — DSN/URL normalisation
+│   ├── models.py           #   SQLAlchemy 2.0 async models (grid, plant, runs, keys, audit)
+│   ├── consumer.py         #   TelemetryConsumer (idempotent upsert + DLQ + audit)
+│   ├── api.py              #   FastAPI read API (auth · RBAC · rate limit · audit)
+│   ├── security.py         #   Role enum · SHA-256 key hashing · auth dependency
+│   ├── db.py cache.py ratelimit.py audit.py schemas.py   # supporting modules
+│   ├── migrate.py keys.py logging_setup.py
+│   ├── plant/              #   Phase 3 — AS400 / legacy plant bridge
+│   │   ├── models.py       #     PlantTelemetry contract (flexible vs inflexible load)
+│   │   ├── sources.py      #     simulated · file (batch drop) · odbc (live seam)
+│   │   ├── bridge.py       #     poll → validate → publish (retry + JSONL spool)
+│   │   └── consumer.py     #     Kafka → PostgreSQL, idempotent on (plant_id, window)
+│   └── optimizer/          #   Phase 3 — carbon-arbitrage optimization loop
+│       ├── solver.py       #     greedy lowest-carbon block scheduler
+│       ├── databricks.py   #     Databricks job submission + local fallback
+│       └── loop.py         #     forecast + capacity → schedule → Kafka
+├── test_ingest_grid.py      # Phase 1 offline contract + resilience tests
+├── test_platform.py         # Phase 2 unit + integration tests (auto-skip if no PG)
+├── test_phase3.py           # Phase 3 tests: plant contract, sources, solver maths
+├── requirements.txt         # Phase 1 pinned deps (Python 3.11+)
+├── requirements-platform.txt# Phase 2 deps (-r requirements.txt + FastAPI/SQLAlchemy/asyncpg)
+├── .env.example             # Configuration template
 ├── data/
-│   └── spool/                # Durability buffer (JSONL) + heartbeat marker
-└── docs/                     # Extended architecture notes
+│   └── spool/               # Durability buffer (JSONL) + heartbeat marker
+└── docs/
+    ├── ARCHITECTURE.md      # Design contract, at-least-once rationale, deferred decisions
+    └── VERIFICATION.md      # Use-case verification: step-by-step proof each feature works
 ```
 
 ---
 
 ## 9. Roadmap
 
-- **Phase 1 (this milestone)** — grid ingestion + event backbone.
-- **Phase 2** — Platform Core: FastAPI service, auth/RBAC, audit ledger in
-  PostgreSQL, Redis session cache, AI Orchestrator.
-- **Phase 3** — AS400 / legacy plant-operations bridge and Databricks
-  optimization loop.
+- **Phase 1 (done)** — grid ingestion + event backbone: `docker compose up -d`,
+  `ingest_grid.py` publishes to `ecogrid.telemetry.carbon` with dedupe + spool.
+- **Phase 2 (built & verified; live container soak pending)** — Platform Core:
+  `ecogrid.consumer` idempotent upsert + audit ledger + DLQ, Redis hot-read cache,
+  FastAPI read API with API-key auth / RBAC / rate limiting / append-only audit.
+  Code, compose wiring, and the `ecogrid/platform-core:phase3` image are complete
+  and pass the automated suite (75 tests); the only open step is a full
+  `docker compose --profile platform up -d --build` bring-up, which needs a Docker
+  host (not available in this sandbox).
+- **Phase 3 (built & verified; live container soak pending)** — Plant Operations &
+  Optimization: AS400/legacy plant bridge (simulated · file · odbc seam),
+  `ecogrid.plant.consumer` idempotent persistence, and the carbon-arbitrage
+  optimizer (Databricks when configured, local greedy solver otherwise) publishing
+  to `ecogrid.decisions.schedule`. Bring up with
+  `docker compose --profile phase3 up -d --build`; trigger a run with
+  `POST /api/v1/optimize/run` (operator or admin).
+- **Verification** — step-by-step proof for every use case lives in
+  [`docs/VERIFICATION.md`](docs/VERIFICATION.md).

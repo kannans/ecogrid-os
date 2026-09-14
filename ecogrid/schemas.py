@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 T = TypeVar("T")
 
@@ -93,3 +93,104 @@ class WindowStats(BaseModel):
     cleanest_window_from: datetime | None
     dirtiest_window_from: datetime | None
     forecast_only_count: int
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 — plant operations + optimisation
+# --------------------------------------------------------------------------- #
+
+
+class PlantOut(BaseModel):
+    """Plant load for one settlement window."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    plant_id: str
+    plant_name: str
+    window_from: datetime
+    window_to: datetime
+
+    total_load_mw: float
+    flexible_load_mw: float
+    inflexible_load_mw: float
+
+    process_states: dict[str, Any]
+    unit: str
+    is_estimate: bool
+
+    ingested_at: datetime
+    first_seen_at: datetime
+    last_seen_at: datetime
+    revision_count: int
+
+
+class ScheduleDecisionOut(BaseModel):
+    """One process × window decision."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: str
+    process_id: str
+    process_name: str
+    window_from: datetime
+    window_to: datetime
+    action: str
+    load_mw: float
+    intensity: float
+    carbon_kg: float
+    baseline_carbon_kg: float
+    carbon_saved_kg: float
+    reason: str
+
+
+class OptimizationRunOut(BaseModel):
+    """A completed optimisation run."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    run_id: str
+    created_at: datetime
+    horizon_windows: int
+    solver: str
+
+    baseline_carbon_kg: float
+    optimized_carbon_kg: float
+    carbon_saved_kg: float
+
+    process_count: int
+    decision_count: int
+    unscheduled: list[Any] = Field(default_factory=list)
+    notes: list[Any] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def saving_pct(self) -> float:
+        """Percentage carbon reduction vs the naive baseline."""
+        if self.baseline_carbon_kg <= 0:
+            return 0.0
+        return round(100.0 * self.carbon_saved_kg / self.baseline_carbon_kg, 2)
+
+
+class SchedulePlanOut(BaseModel):
+    """The latest run together with its schedule — what a dashboard renders."""
+
+    run: OptimizationRunOut
+    count: int
+    decisions: list[ScheduleDecisionOut]
+
+
+class OptimizeRunResponse(BaseModel):
+    """Result of triggering an optimisation run."""
+
+    run_id: str
+    solver: str
+    horizon_windows: int
+    process_count: int
+    decision_count: int
+    baseline_carbon_kg: float
+    optimized_carbon_kg: float
+    carbon_saved_kg: float
+    saving_pct: float
+    unscheduled: list[str]
+    notes: list[str]
+    status: str = Field(description="`ok`, or `skipped` when there was nothing to optimise")
