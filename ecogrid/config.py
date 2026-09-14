@@ -54,6 +54,17 @@ class PlatformSettings(BaseSettings):
     kafka_commit_batch_size: int = Field(default=50, ge=1)
     kafka_retry_backoff_seconds: float = Field(default=5.0, gt=0)
 
+    # --- Kafka security (broker authentication) ---
+    #: ``PLAINTEXT`` (default, local dev) | ``SASL_PLAINTEXT`` | ``SASL_SSL``.
+    #: The nginx gateway's TLS covers client→platform; this covers
+    #: platform→broker, which is a *different hop* and is not TLS-protected by
+    #: the gateway. Enable SASL before any non-local deployment.
+    kafka_security_protocol: str = "PLAINTEXT"
+    #: ``PLAIN`` | ``SCRAM-SHA-256`` | ``SCRAM-SHA-512``
+    kafka_sasl_mechanism: str = "PLAIN"
+    kafka_sasl_username: str | None = None
+    kafka_sasl_password: str | None = None
+
     # --- API ---
     api_title: str = "EcoGrid OS — Platform Core"
     api_host: str = "0.0.0.0"

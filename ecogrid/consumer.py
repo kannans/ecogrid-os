@@ -46,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from ecogrid.cache import TelemetryCache
 from ecogrid.config import PlatformSettings
 from ecogrid.db import check_connectivity, create_engine, create_session_factory
+from ecogrid.kafka import security_kwargs
 from ecogrid.logging_setup import configure_logging
 from ecogrid.models import GridTelemetryRow, IngestAudit
 
@@ -291,6 +292,7 @@ class TelemetryConsumer:
             enable_auto_commit=False,
             max_poll_records=settings.kafka_max_poll_records,
             session_timeout_ms=settings.kafka_session_timeout_ms,
+            **security_kwargs(settings),
         )
         await self._consumer.start()
         assigned = sorted(tp.partition for tp in self._consumer.assignment())
@@ -307,6 +309,7 @@ class TelemetryConsumer:
             client_id=f"{settings.kafka_client_id}-dlq",
             acks="all",
             compression_type="gzip",
+            **security_kwargs(settings),
         )
         await self._dlq_producer.start()
 

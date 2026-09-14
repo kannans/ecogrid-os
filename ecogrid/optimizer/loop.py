@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ecogrid.config import PlatformSettings
 from ecogrid.db import create_engine, create_session_factory
+from ecogrid.kafka import security_kwargs
 from ecogrid.logging_setup import configure_logging
 from ecogrid.models import (
     GridTelemetryRow,
@@ -378,6 +379,7 @@ class OptimizationLoop:
                 acks="all",
                 enable_idempotence=True,
                 compression_type="gzip",
+                **security_kwargs(self._settings),
             )
             await self._producer.start()
         logger.info(

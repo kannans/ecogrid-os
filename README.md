@@ -521,6 +521,32 @@ supplies sane defaults; override to point at real plant systems.
 | `GATEWAY_HTTP_PORT` | `8080` | Plain HTTP (dashboard + proxy) |
 | `GATEWAY_HTTPS_PORT` | `8443` | TLS. Certs are read from `./certs` |
 
+### Kafka security (platform → broker)
+
+A **separate hop** from the gateway's TLS. The nginx gateway protects
+client→platform; these settings authenticate the platform's own connections to
+Kafka. Enabling one does not enable the other.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ECOGRID_KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT` | `PLAINTEXT` \| `SASL_PLAINTEXT` \| `SASL_SSL` |
+| `ECOGRID_KAFKA_SASL_MECHANISM` | `PLAIN` | `PLAIN` \| `SCRAM-SHA-256` \| `SCRAM-SHA-512` |
+| `ECOGRID_KAFKA_SASL_USERNAME` / `_PASSWORD` | _(none)_ | **Required** whenever the protocol is not `PLAINTEXT`; startup fails loudly if half-set |
+
+### Production topologies
+
+Two compose overrides ship with the repo. Neither is active by default, so local
+behaviour is unchanged.
+
+| Override | Purpose | Command |
+|---|---|---|
+| `docker-compose.sasl.yml` | SASL/PLAIN auth on the platform → broker hop | `docker compose -f docker-compose.yml -f docker-compose.sasl.yml --profile platform up -d` |
+| `docker-compose.ha.yml` | 3-node KRaft cluster, RF=3, min-ISR=2 | `docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d` |
+
+They compose — pass both `-f` flags for an authenticated, replicated cluster.
+Note: SASL/PLAIN sends credentials in cleartext across the cluster network, so
+move to `SASL_SSL` with certificates on any shared network.
+
 **Why 300 seconds?** The upstream API publishes at half-hourly granularity, so
 a 5-minute cadence is ~6× oversampled — fast enough to catch revised forecasts
 and settle windows promptly, while staying comfortably inside the public rate
@@ -586,6 +612,9 @@ ecogrid-os/
 │   └── src/App.tsx         #   platform · grid · plant · schedule · orchestrator
 ├── alembic/                 # Schema migrations (baseline + future revisions)
 ├── docker/nginx/nginx.conf  # Edge gateway: TLS, static assets, rate limiting
+├── docker-compose.sasl.yml  # Opt-in SASL auth for the platform → broker hop
+├── docker-compose.ha.yml    # Opt-in 3-node KRaft cluster (RF=3, min-ISR=2)
+├── ecogrid/kafka.py         # Shared Kafka auth for every client
 ├── test_ingest_grid.py      # Phase 1 offline contract + resilience tests
 ├── test_platform.py         # Phase 2 unit + integration tests (auto-skip if no PG)
 ├── test_phase3.py           # Phase 3 tests: plant contract, sources, solver maths

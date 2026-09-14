@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ecogrid.config import PlatformSettings
 from ecogrid.db import check_connectivity, create_engine, create_session_factory
+from ecogrid.kafka import security_kwargs
 from ecogrid.logging_setup import configure_logging
 from ecogrid.models import PlantTelemetryRow
 from ecogrid.plant.models import PlantTelemetry
@@ -123,6 +124,7 @@ class PlantConsumer:
             client_id=f"{self._settings.plant_client_id}-consumer",
             auto_offset_reset="earliest",
             enable_auto_commit=False,
+            **security_kwargs(self._settings),
         )
         await self._consumer.start()
 
@@ -131,6 +133,7 @@ class PlantConsumer:
             client_id=f"{self._settings.plant_client_id}-dlq",
             acks="all",
             compression_type="gzip",
+            **security_kwargs(self._settings),
         )
         await self._dlq.start()
 

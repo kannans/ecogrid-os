@@ -1,0 +1,155 @@
+# Multi-broker (3-node) KRaft topology with replication factor 3.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d
+#
+# The default stack runs ONE broker with replication factor 1. That is fine for
+# local development and unacceptable for production: losing the only broker
+# takes the entire event spine with it, and there is no ISR to fail over to.
+#
+# This override adds two more KRaft nodes (3 controllers, 3 brokers) and raises
+# every replication factor to 3 with min.insync.replicas=2, so the cluster
+# survives the loss of one node.
+#
+# NOTE: topics already created at RF=1 are NOT automatically re-replicated.
+# On an existing volume either recreate the topics or use kafka-reassign-
+# partitions. Start from a clean volume (-v) for a genuine RF=3 cluster.
+
+name: ecogrid-os
+
+services:
+  kafka:
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093,2@kafka-2:29093,3@kafka-3:29093"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+
+  kafka-2:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: kafka-2
+    container_name: ecogrid-kafka-2
+    restart: unless-stopped
+    networks: [ecogrid-net]
+    environment:
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093,2@kafka-2:29093,3@kafka-3:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENERS: "PLAINTEXT://kafka-2:29092,CONTROLLER://kafka-2:29093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-2:29092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes:
+      - kafka_2_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server kafka-2:29092 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
+
+  kafka-3:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: kafka-3
+    container_name: ecogrid-kafka-3
+    restart: unless-stopped
+    networks: [ecogrid-net]
+    environment:
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093,2@kafka-2:29093,3@kafka-3:29093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENERS: "PLAINTEXT://kafka-3:29092,CONTROLLER://kafka-3:29093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-3:29092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes:
+      - kafka_3_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server kafka-3:29092 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 45s
+
+  # Provision at RF=3. The base file hardcodes --replication-factor 1, so the
+  # topic creation is restated here rather than silently keeping RF=1.
+  kafka-init:
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "[kafka-init] provisioning topics at replication-factor 3..."
+        BS="kafka:29092,kafka-2:29092,kafka-3:29092"
+        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+          --topic "${KAFKA_TELEMETRY_TOPIC:-ecogrid.telemetry.carbon}" \
+          --partitions 3 --replication-factor 3 \
+          --config cleanup.policy=compact,delete \
+          --config retention.ms=604800000 \
+          --config min.insync.replicas=2
+        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+          --topic "${KAFKA_DLQ_TOPIC:-ecogrid.telemetry.carbon.dlq}" \
+          --partitions 1 --replication-factor 3 --config retention.ms=1209600000
+        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+          --topic "${KAFKA_PLANT_TOPIC:-ecogrid.telemetry.plant}" \
+          --partitions 3 --replication-factor 3 \
+          --config cleanup.policy=compact,delete --config retention.ms=604800000
+        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+          --topic "${KAFKA_DECISIONS_TOPIC:-ecogrid.decisions.schedule}" \
+          --partitions 1 --replication-factor 3 --config retention.ms=604800000
+        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+          --topic "${KAFKA_ADVICE_TOPIC:-ecogrid.decisions.advice}" \
+          --partitions 1 --replication-factor 3 --config retention.ms=604800000
+        echo "[kafka-init] done."
+
+  # Clients must list every broker: with a single bootstrap entry they still
+  # discover the cluster, but they cannot bootstrap at all if that one node is
+  # the one that is down.
+  ingestor:
+    environment: &ha_client_env
+      ECOGRID_KAFKA_BOOTSTRAP_SERVERS: "kafka:29092,kafka-2:29092,kafka-3:29092"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
+        condition: service_healthy
+
+  consumer:
+    environment: *ha_client_env
+  api:
+    environment: *ha_client_env
+  plant-bridge:
+    environment: *ha_client_env
+  plant-consumer:
+    environment: *ha_client_env
+  optimizer:
+    environment: *ha_client_env
+  orchestrator:
+    environment: *ha_client_env
+
+volumes:
+  kafka_2_data:
+    name: ecogrid-kafka-2-data
+  kafka_3_data:
+    name: ecogrid-kafka-3-data

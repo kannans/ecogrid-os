@@ -115,6 +115,13 @@ class Settings(BaseSettings):
     kafka_backoff_base_seconds: float = 1.0
     kafka_backoff_max_seconds: float = 30.0
     kafka_broker_wait_seconds: float = 90.0
+    # --- Broker authentication (opt-in; see docs/ARCHITECTURE.md) ---
+    #: `PLAINTEXT` (default, local) | `SASL_PLAINTEXT` | `SASL_SSL`
+    kafka_security_protocol: str = "PLAINTEXT"
+    #: `PLAIN` | `SCRAM-SHA-256` | `SCRAM-SHA-512`
+    kafka_sasl_mechanism: str = "PLAIN"
+    kafka_sasl_username: str | None = None
+    kafka_sasl_password: str | None = None
     #: Hard per-attempt ceiling on a single send, enforced with asyncio.wait_for
     #: rather than relying on client internals. aiokafka has no `max_block_ms`
     #: (that is the Java client's name), so a send against a nonexistent topic
@@ -708,6 +715,39 @@ class TelemetrySpool:
 # --------------------------------------------------------------------------- #
 
 
+def _kafka_security_kwargs(settings: Settings) -> dict[str, Any]:
+    """Auth kwargs for the producer.
+
+    Deliberately self-contained rather than importing from the ``ecogrid``
+    package: the ingestion worker's slim image ships only this module, so it
+    must not depend on platform code.
+
+    Returns ``{}`` for PLAINTEXT so the default local stack is unchanged, and
+    raises on a half-configured setup rather than connecting anonymously — a
+    producer that omits SASL works against a local broker and fails only once
+    the production broker rejects it.
+    """
+    protocol = (settings.kafka_security_protocol or "PLAINTEXT").strip().upper()
+    if protocol == "PLAINTEXT":
+        return {}
+    if protocol not in {"SASL_PLAINTEXT", "SASL_SSL"}:
+        raise ValueError(
+            f"unsupported ECOGRID_KAFKA_SECURITY_PROTOCOL={protocol!r} "
+            "(expected PLAINTEXT, SASL_PLAINTEXT or SASL_SSL)"
+        )
+    if not settings.kafka_sasl_username or not settings.kafka_sasl_password:
+        raise ValueError(
+            f"{protocol} requires both ECOGRID_KAFKA_SASL_USERNAME and "
+            "ECOGRID_KAFKA_SASL_PASSWORD to be set"
+        )
+    return {
+        "security_protocol": protocol,
+        "sasl_mechanism": settings.kafka_sasl_mechanism,
+        "sasl_plain_username": settings.kafka_sasl_username,
+        "sasl_plain_password": settings.kafka_sasl_password,
+    }
+
+
 class TelemetryPublisher:
     """Idempotent Kafka producer with bounded retries and a disk spool fallback."""
 
@@ -736,6 +776,7 @@ class TelemetryPublisher:
             max_batch_size=32 * 1024,
             request_timeout_ms=self._settings.kafka_request_timeout_ms,
             retry_backoff_ms=500,
+            **_kafka_security_kwargs(self._settings),
         )
         await self._producer.start()
         logger.info(

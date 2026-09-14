@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ecogrid.config import PlatformSettings
+from ecogrid.kafka import security_kwargs
 from ecogrid.logging_setup import configure_logging
 from ecogrid.plant.models import WINDOW_MINUTES, PlantTelemetry
 from ecogrid.plant.sources import PlantSource, build_source
@@ -175,6 +176,7 @@ class PlantBridge:
                 acks="all",
                 enable_idempotence=True,
                 compression_type="gzip",
+                **security_kwargs(self.settings),
             )
             self._own_producer = True
             await self.producer.start()

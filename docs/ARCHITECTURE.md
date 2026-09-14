@@ -189,6 +189,6 @@ The FastAPI service consumes the stream and must uphold:
 |---|---|---|
 | Schema registry (Avro/Protobuf) | ⏳ Deferred | JSON + `schema_version` is sufficient for one producer and one consumer. Revisit when a third producer appears. |
 | TLS — client → platform | ✅ **Done** | Terminated at the nginx edge gateway (`--profile gateway`), which also serves the dashboard and applies per-IP rate limiting. |
-| SASL — client → **broker** | ⏳ Open | The broker is only reachable on the Compose bridge. TLS now covers client→gateway, but **broker-side SASL is still not enabled** and is required before any non-local deployment. Do not treat the gateway's TLS as covering this hop. |
-| Multi-broker replication | ⏳ Open | Replication factors are pinned to 1. Raising them requires ≥3 brokers and an HA topology override; planned, not built. |
+| SASL — client → **broker** | ✅ Wired | `ecogrid/kafka.py` supplies auth to every platform client; `ingest_grid.py` carries its own copy because the slim worker image ships standalone and must not depend on platform code. `docker-compose.sasl.yml` enables it on the broker. Defaults to `PLAINTEXT`, so local behaviour is unchanged. Do not treat the gateway's TLS as covering this hop. |
+| Multi-broker replication | ✅ Topology provided | `docker-compose.ha.yml` runs 3 KRaft nodes at RF=3 / min-ISR=2. The default single-broker stack stays RF=1 for local dev. Existing RF=1 topics are not auto-re-replicated — start from a clean volume or use `kafka-reassign-partitions`. |
 | Dead-letter topic consumption | ⏳ Open | `ecogrid.telemetry.carbon.dlq` is provisioned but unconsumed. The worker's spool handles producer-side redelivery; a DLQ consumer matters once a *consumer* starts failing. |

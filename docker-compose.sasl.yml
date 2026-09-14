@@ -1,0 +1,51 @@
+# Opt-in SASL authentication for the platform → broker hop.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sasl.yml \
+#     --profile platform --profile phase3 up -d
+#
+# TWO INDEPENDENT HOPS — do not conflate them:
+#   client   → platform : TLS, terminated by the nginx gateway
+#   platform → broker   : this file
+# Enabling the gateway's TLS does NOT authenticate this hop.
+#
+# Mechanism is PLAIN, which sends credentials in cleartext across the cluster
+# network. That is acceptable on a private Compose network and unacceptable
+# otherwise — move to SASL_SSL (with certificates) for anything shared. The
+# defaults below are local-dev credentials; override them in .env.
+
+name: ecogrid-os
+
+services:
+  kafka:
+    environment:
+      KAFKA_LISTENERS: "PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092,SASL_PLAINTEXT://kafka:29094"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-9092},SASL_PLAINTEXT://kafka:29094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT"
+      KAFKA_SASL_ENABLED_MECHANISMS: "PLAIN"
+      # JAAS for the SASL listener: one admin user (inter-broker) and one
+      # application user ("ecogrid") that the platform authenticates as.
+      KAFKA_LISTENER_NAME_SASL_PLAINTEXT_PLAIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="${KAFKA_SASL_ADMIN_PASSWORD:-admin-secret}" user_admin="${KAFKA_SASL_ADMIN_PASSWORD:-admin-secret}" user_${KAFKA_SASL_USER:-ecogrid}="${KAFKA_SASL_USER_PASSWORD:-ecogrid-secret}";'
+
+  # Every client — including the Phase 1 worker — reads the same ECOGRID_* vars,
+  # so one anchor covers them all. Compose merges `environment` maps, so these
+  # override only the keys listed here.
+  ingestor:
+    environment: &sasl_client_env
+      ECOGRID_KAFKA_BOOTSTRAP_SERVERS: "kafka:29094"
+      ECOGRID_KAFKA_SECURITY_PROTOCOL: "SASL_PLAINTEXT"
+      ECOGRID_KAFKA_SASL_MECHANISM: "PLAIN"
+      ECOGRID_KAFKA_SASL_USERNAME: "${KAFKA_SASL_USER:-ecogrid}"
+      ECOGRID_KAFKA_SASL_PASSWORD: "${KAFKA_SASL_USER_PASSWORD:-ecogrid-secret}"
+
+  consumer:
+    environment: *sasl_client_env
+  api:
+    environment: *sasl_client_env
+  plant-bridge:
+    environment: *sasl_client_env
+  plant-consumer:
+    environment: *sasl_client_env
+  optimizer:
+    environment: *sasl_client_env
+  orchestrator:
+    environment: *sasl_client_env
