@@ -243,6 +243,37 @@ with `action` of `run` or `idle` and a `reason`.
 
 Triggering with a **viewer** key must return **403**.
 
+> ### ✅ CONFIRMED — UC-9 + UC-10 (2026-09-15)
+>
+> `POST /api/v1/optimize/run` returned `200`:
+>
+> ```json
+> {"run_id": "890bc25d8fb748fa9c203a646f85b814", "solver": "local-greedy-v1",
+>  "horizon_windows": 4, "process_count": 3, "decision_count": 8,
+>  "baseline_carbon_kg": 2601.0, "optimized_carbon_kg": 1377.0,
+>  "carbon_saved_kg": 1224.0, "saving_pct": 47.06,
+>  "unscheduled": ["electrolyser-01"], "status": "ok"}
+> ```
+>
+> **This is the arbitrage working, and the numbers reconcile exactly.** The batch
+> mill (12 MW × 2 windows) moved off the 153 g/kWh windows onto the 51 g/kWh one:
+> 12 MW × 0.5 h × (153 − 51) = 612 kg per window, × 2 = **1224 kg CO₂e** — the
+> reported saving. Baseline 1836 + 765 = 2601; optimised 612 + 765 = 1377;
+> 1224 / 2601 = **47.06%**.
+>
+> Both "failures" in that output are correct behaviour, not defects:
+> * `electrolyser-01` unscheduled — it needs a contiguous **3**-window block with
+>   8 MW free, but the mill holds 12 MW of the 13.5 MW capacity in the clean
+>   windows, leaving 1.5 MW. The `notes` field states this precisely.
+> * The thermal store did not move (its 765 kg appears in *both* totals) — the
+>   same capacity constraint. A wider horizon or more plant flexibility would let
+>   it shift too.
+>
+> This also closed a live bug: `load_capacity()` had been building its list from
+> the plant's windows rather than the grid's, so the request 500'd once plant
+> telemetry existed. See the commit `fix(optimizer): align flexible capacity to
+> the grid horizon`.
+
 ---
 
 ## UC-10 — The schedule is a genuine carbon arbitrage (end-to-end)

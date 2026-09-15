@@ -46,9 +46,14 @@ operations, AI orchestration, and an operator dashboard behind an edge gateway.
 > `optimizer`, `orchestrator` and `gateway`. `migrate` and `certs-init` are
 > one-shots that exited `0`, so they do not appear in `docker compose ps`.
 >
+> **The arbitrage is verified end-to-end.** A live run produced a schedule saving
+> **1224 kg CO₂e (47.06%)** — the batch mill moved from 153 g/kWh windows onto a
+> 51 g/kWh window, and the totals reconcile exactly. See UC-9/UC-10 in
+> **[`docs/VERIFICATION.md`](docs/VERIFICATION.md)**.
+>
 > **Still unexecuted:** the `sasl` and `ha` topology overrides (configuration-
-> verified only), a multi-hour soak, and the per-use-case assertions in
-> **[`docs/VERIFICATION.md`](docs/VERIFICATION.md)** (UC-1 → UC-17).
+> verified only), a multi-hour soak, and the remaining per-use-case assertions
+> (UC-3 → UC-6, UC-11, UC-12, UC-14, UC-16, UC-17).
 
 ---
 
