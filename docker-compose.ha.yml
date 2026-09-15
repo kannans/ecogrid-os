@@ -99,24 +99,29 @@ services:
       - |
         set -e
         echo "[kafka-init] provisioning topics at replication-factor 3..."
+        # NOTE: `$$BS` — Compose interpolates `$VAR` in YAML before the shell
+        # ever sees it, so a bare `$BS` is replaced with an empty string and
+        # every kafka-topics call gets `--bootstrap-server ""`. `$$` escapes it
+        # to a literal `$` for the container shell. (This silently produced
+        # `WARN The "BS" variable is not set` and a broken topic bootstrap.)
         BS="kafka:29092,kafka-2:29092,kafka-3:29092"
-        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+        kafka-topics --bootstrap-server "$$BS" --create --if-not-exists \
           --topic "${KAFKA_TELEMETRY_TOPIC:-ecogrid.telemetry.carbon}" \
           --partitions 3 --replication-factor 3 \
           --config cleanup.policy=compact,delete \
           --config retention.ms=604800000 \
           --config min.insync.replicas=2
-        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+        kafka-topics --bootstrap-server "$$BS" --create --if-not-exists \
           --topic "${KAFKA_DLQ_TOPIC:-ecogrid.telemetry.carbon.dlq}" \
           --partitions 1 --replication-factor 3 --config retention.ms=1209600000
-        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+        kafka-topics --bootstrap-server "$$BS" --create --if-not-exists \
           --topic "${KAFKA_PLANT_TOPIC:-ecogrid.telemetry.plant}" \
           --partitions 3 --replication-factor 3 \
           --config cleanup.policy=compact,delete --config retention.ms=604800000
-        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+        kafka-topics --bootstrap-server "$$BS" --create --if-not-exists \
           --topic "${KAFKA_DECISIONS_TOPIC:-ecogrid.decisions.schedule}" \
           --partitions 1 --replication-factor 3 --config retention.ms=604800000
-        kafka-topics --bootstrap-server "$BS" --create --if-not-exists \
+        kafka-topics --bootstrap-server "$$BS" --create --if-not-exists \
           --topic "${KAFKA_ADVICE_TOPIC:-ecogrid.decisions.advice}" \
           --partitions 1 --replication-factor 3 --config retention.ms=604800000
         echo "[kafka-init] done."

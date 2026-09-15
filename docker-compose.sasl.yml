@@ -18,13 +18,21 @@ name: ecogrid-os
 services:
   kafka:
     environment:
-      KAFKA_LISTENERS: "PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092,SASL_PLAINTEXT://kafka:29094"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-9092},SASL_PLAINTEXT://kafka:29094"
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT"
+      # The listener is named `SASL` — NOT `SASL_PLAINTEXT`. Confluent's image
+      # turns KAFKA_LISTENER_NAME_<NAME>_..._JAAS_CONFIG into a dotted config key
+      # by splitting on every underscore, so a listener named SASL_PLAINTEXT
+      # produced `listener.name.sasl.plaintext.plain.sasl.jaas.config`, which is
+      # not a real Kafka setting. The JAAS was therefore never applied, the SASL
+      # listener could not start, and the broker came up unhealthy.
+      # With a single-word listener name the key is
+      # `listener.name.sasl.plain.sasl.jaas.config` — correct.
+      KAFKA_LISTENERS: "PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092,SASL://kafka:29094"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_HOST_PORT:-9092},SASL://kafka:29094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,SASL:SASL_PLAINTEXT"
       KAFKA_SASL_ENABLED_MECHANISMS: "PLAIN"
-      # JAAS for the SASL listener: one admin user (inter-broker) and one
-      # application user ("ecogrid") that the platform authenticates as.
-      KAFKA_LISTENER_NAME_SASL_PLAINTEXT_PLAIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="${KAFKA_SASL_ADMIN_PASSWORD:-admin-secret}" user_admin="${KAFKA_SASL_ADMIN_PASSWORD:-admin-secret}" user_${KAFKA_SASL_USER:-ecogrid}="${KAFKA_SASL_USER_PASSWORD:-ecogrid-secret}";'
+      # JAAS for the SASL listener: one admin user and one application user
+      # ("ecogrid") that the platform authenticates as.
+      KAFKA_LISTENER_NAME_SASL_PLAIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="${KAFKA_SASL_ADMIN_PASSWORD:-admin-secret}" user_admin="${KAFKA_SASL_ADMIN_PASSWORD:-admin-secret}" user_${KAFKA_SASL_USER:-ecogrid}="${KAFKA_SASL_USER_PASSWORD:-ecogrid-secret}";'
 
   # Every client — including the Phase 1 worker — reads the same ECOGRID_* vars,
   # so one anchor covers them all. Compose merges `environment` maps, so these
