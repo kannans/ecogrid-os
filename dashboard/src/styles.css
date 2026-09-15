@@ -198,6 +198,18 @@ code {
   margin: 10px 0 4px;
 }
 
+/* Marks content that is real but behind the rest of the panel — e.g. advice
+   written for an older optimisation run. Amber, not red: it is not an error. */
+.stale {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(210, 153, 34, 0.12);
+  border: 1px solid var(--warn);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 /* Badges ----------------------------------------------------------------- */
 .badge {
   display: inline-block;

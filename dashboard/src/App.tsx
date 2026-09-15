@@ -137,6 +137,13 @@ export default function App() {
 
   const { health, telemetry, stats, schedule, plants, advice } = snapshot ?? {}
 
+  // Advice is generated on its own cadence (or on demand), so it can legitimately
+  // refer to an older run than the schedule beside it. Showing "no optimisation
+  // run available yet" next to a populated schedule reads as a contradiction, so
+  // say plainly that the advice is behind rather than letting it look broken.
+  const adviceStale = Boolean(advice && schedule && advice.run_id !== schedule.run.run_id)
+  const scheduleRun = schedule?.run.run_id.slice(0, 8)
+
   return (
     <div className="app">
       <header className="topbar">
@@ -278,7 +285,11 @@ export default function App() {
 
           <Card
             title="AI Orchestrator"
-            subtitle={advice ? `source: ${advice.source}` : 'no advice yet'}
+            subtitle={
+              advice
+                ? `source: ${advice.source}${adviceStale ? ' · predates current schedule' : ''}`
+                : 'no advice yet'
+            }
           >
             {advice ? (
               <>
@@ -286,6 +297,13 @@ export default function App() {
                   <Badge tone={advice.source === 'claude' ? 'good' : 'warn'} label={advice.source} />
                   <Metric label="Confidence" value={num(advice.confidence * 100, 0)} unit="%" />
                 </div>
+                {adviceStale ? (
+                  <p className="stale">
+                    This advice was written for run {advice.run_id?.slice(0, 8) ?? 'none'}, but the
+                    current schedule is run {scheduleRun}. Press <strong>Ask orchestrator</strong> to
+                    re-review it.
+                  </p>
+                ) : null}
                 <p className="headline">{advice.headline}</p>
                 <p className="muted">{advice.rationale}</p>
                 {advice.recommended_actions.length ? (

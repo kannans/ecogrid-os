@@ -361,7 +361,11 @@ async def healthz() -> HealthOut:
         if newest is not None:
             if newest.tzinfo is None:
                 newest = newest.replace(tzinfo=timezone.utc)
-            lag = (datetime.now(timezone.utc) - newest).total_seconds()
+            # `newest` is the END of the newest window, and the window currently
+            # in progress has an end in the future — so the raw difference is
+            # negative and the dashboard rendered "newest window is -7.9 min
+            # old". A window that has not finished yet is not stale: clamp at 0.
+            lag = max(0.0, (datetime.now(timezone.utc) - newest).total_seconds())
     except Exception:  # noqa: BLE001 — health must not 500
         lag = None
 
