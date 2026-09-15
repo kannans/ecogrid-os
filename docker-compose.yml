@@ -261,7 +261,7 @@ services:
     # logs plant-bridge` failed with "no such service: migrate": naming a
     # service activates its own profile, but its dependencies must also be in an
     # active profile. Listing all three fixes that.
-    profiles: ["platform", "phase3", "ai"]
+    profiles: ["platform", "phase3", "ai", "gateway"]
     restart: "no"
     # One-shot schema bootstrap. MUST run `ecogrid.migrate`, NOT the image's
     # default CMD (which is the consumer) — otherwise this container would start
@@ -311,7 +311,10 @@ services:
   api:
     <<: *platform-common
     container_name: ecogrid-api
-    profiles: ["platform"]
+    # `gateway` is listed because the gateway depends on this service: enabling
+    # only the gateway profile must still pull the API in, or the command dies
+    # with "no such service: api". See the profile-integrity test.
+    profiles: ["platform", "gateway"]
     command:
       - "uvicorn"
       - "ecogrid.api:app"
