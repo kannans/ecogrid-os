@@ -299,9 +299,11 @@ export default function App() {
                 </div>
                 {adviceStale ? (
                   <p className="stale">
-                    This advice was written for run {advice.run_id?.slice(0, 8) ?? 'none'}, but the
-                    current schedule is run {scheduleRun}. Press <strong>Ask orchestrator</strong> to
-                    re-review it.
+                    {advice.run_id
+                      ? `This advice was written for run ${advice.run_id.slice(0, 8)}`
+                      : 'This advice was written before any optimisation run existed'}
+                    , but the current schedule is run {scheduleRun}. Press{' '}
+                    <strong>Ask orchestrator</strong> to re-review it.
                   </p>
                 ) : null}
                 <p className="headline">{advice.headline}</p>
