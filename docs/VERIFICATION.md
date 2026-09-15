@@ -191,6 +191,43 @@ curl -s -H "X-API-Key: $ADMIN_KEY" "$API/api/v1/audit?limit=20"
 from UC-4 (`action=access.denied`) and the **401** from UC-3. There is no update
 or delete path for this table anywhere in the codebase.
 
+> ### ✅ CONFIRMED — UC-3 / UC-4 / UC-5 / UC-6 (2026-09-15, live stack)
+>
+> Exercised with temporary keys created directly in the database and revoked
+> immediately afterwards, so no long-lived credential was involved.
+>
+> | Check | Expected | Observed |
+> |---|---|---|
+> | `GET /api/v1/telemetry/latest`, no key | 401 | **401** |
+> | same, garbage key | 401 | **401** |
+> | `GET /healthz`, no key | 200 | **200** |
+> | viewer `GET /whoami` | 200 | **200** |
+> | viewer `GET /audit` (admin-only) | 403 | **403** |
+> | admin `GET /audit` | 200 | **200** |
+> | viewer `POST /optimize/run` (operator+) | 403 | **403** |
+> | 130 rapid requests, one key | 120×200, then 429 | **120×200, 10×429** |
+> | 429 response headers | `Retry-After`, `X-RateLimit-Limit` | **`Retry-After: 15`, `X-RateLimit-Limit: 120`** |
+> | audit records the denials | `action=access.denied` | **present** (also `auth.rejected`) |
+>
+> Two incidental findings worth keeping:
+> * The audit log also contains **`request.error`** rows — the middleware recorded
+>   the optimizer's HTTP 500s from the capacity bug. Failures leave a trail even
+>   when the client only receives an empty body.
+> * `POST /optimize/run` returned **429** straight after the 130-request burst.
+>   That is the limiter working correctly, not a defect: the same key had just
+>   exhausted its window. A fresh key returned **200** and this schedule:
+>
+> ```
+> Batch mill            2026-09-15T08:30:00Z    51.0 g/kWh   saves 612 kg
+> Thermal store charge  2026-09-14T17:00:00Z   153.0 g/kWh   saves   0 kg
+> Thermal store charge  2026-09-14T17:30:00Z   153.0 g/kWh   saves   0 kg
+> ```
+>
+> The mill sits on the 51 g/kWh window; the thermal store stays on 153 g/kWh
+> because the mill already holds 12 MW of the 13.5 MW flexible capacity. When
+> testing, beware of reusing a key across a rate-limit burst and a functional
+> assertion — the resulting 429 looks like a failure and is not.
+
 ---
 
 ## UC-7 — The AS400 bridge publishes plant telemetry (Phase 3)
