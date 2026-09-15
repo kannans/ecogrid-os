@@ -90,7 +90,8 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.PrimaryKeyConstraint("consumer_group", "topic", "partition"),
-        sa.UniqueConstraint("consumer_group", "topic", "partition", name="uq_ingest_audit"),
+        # No UNIQUE constraint on these columns — the primary key already
+        # enforces it. See the note on IngestAudit in ecogrid/models.py.
     )
 
     op.create_table(

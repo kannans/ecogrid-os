@@ -14,6 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from ecogrid.config import PlatformSettings
+from ecogrid.optimizer.databricks import DatabricksRunner
 from ecogrid.optimizer.loop import load_processes, plan_payload
 from ecogrid.optimizer.solver import FlexibleProcess, IntensityWindow, solve
 from ecogrid.plant.models import PlantTelemetry
@@ -305,6 +306,35 @@ def test_misaligned_capacity_raises_a_clear_error() -> None:
 
     with pytest.raises(ValueError, match="aligned per grid window"):
         solve(windows, [process], flexible_capacity_mw=[10.0, 10.0])
+
+
+async def test_databricks_falls_back_when_the_cluster_is_unreachable() -> None:
+    """UC-12: configured-but-dead Databricks must degrade, not fail.
+
+    Returning ``None`` is the contract — it is the caller's signal to use the
+    local solver. A scheduler that produces nothing because a cluster is down
+    would be worse than one that produces a slightly worse schedule.
+    """
+    settings = PlatformSettings(
+        databricks_host="http://127.0.0.1:9",  # deliberately nothing listening
+        databricks_token="t",  # noqa: S106
+        databricks_job_id="1",
+    )
+    runner = DatabricksRunner(settings)
+    assert runner.is_configured
+
+    plan = await runner.run_remote(
+        make_windows([300.0, 100.0]),
+        [FlexibleProcess("p1", "P1", 4.0, 1)],
+        max_wait_seconds=1,
+    )
+    assert plan is None
+
+
+async def test_databricks_is_skipped_entirely_when_unconfigured() -> None:
+    runner = DatabricksRunner(PlatformSettings(databricks_host=None))
+    assert not runner.is_configured
+    assert await runner.run_remote(make_windows([1.0, 2.0]), []) is None
 
 
 def test_capacity_matching_the_horizon_is_accepted() -> None:

@@ -114,7 +114,11 @@ class IngestAudit(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
-    __table_args__ = (UniqueConstraint("consumer_group", "topic", "partition", name="uq_ingest_audit"),)
+    # Deliberately no separate UNIQUE constraint: the primary key is already
+    # (consumer_group, topic, partition), so a unique constraint over those same
+    # columns is redundant. One used to be declared here, and it was the only
+    # thing `alembic --autogenerate` reported as drift — the models promised a
+    # constraint the migration never created, and nothing referenced it.
 
 
 class ApiKey(Base):
