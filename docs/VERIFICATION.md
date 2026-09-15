@@ -381,6 +381,19 @@ docker compose logs optimizer | grep -i "falling back"
 writes a run. A scheduler that produces nothing because a cluster is unreachable
 would be worse than one that produces a slightly worse schedule.
 
+> ### ✅ PARTIALLY CONFIRMED — UC-12 (2026-09-15)
+>
+> * **Unconfigured path — verified live.** No Databricks credentials are set in
+>   the running stack, and the optimizer produced `solver=local-greedy-v1`. That
+>   is the fallback working in production.
+> * **Unreachable path — verified by test.** `DatabricksRunner.run_remote()`
+>   returns `None` when configured against a dead host, which is the contract
+>   that makes the loop fall back. Covered by
+>   `test_databricks_falls_back_when_the_cluster_is_unreachable`.
+> * **Not yet run end-to-end:** a *real* Databricks job (needs a workspace and a
+>   notebook that emits the expected JSON). The seam is exercised; the remote
+>   side is not.
+
 ---
 
 ## UC-13 — The AI Orchestrator produces advice (with or without Claude)
