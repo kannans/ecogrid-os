@@ -422,6 +422,8 @@ pytest -q test_ai_orchestrator.py # AI Orchestrator only: 17 tests
 | Symptom | Cause | Fix |
 |---|---|---|
 | `address already in use` on 5432/6379 | Native PostgreSQL/Redis already running | Set `POSTGRES_HOST_PORT` / `REDIS_HOST_PORT` in `.env` |
+| `no such service: migrate` when logging a single service | Naming a service activates its own profile, but its dependencies must also be in an active profile — `plant-bridge` (phase3) depends on `migrate` | Pass every profile you need in one command. `migrate` declares `platform`, `phase3` **and** `ai` so any of them works |
+| `{"error":"unknown API key"}` (401) | `$ADMIN_KEY` is empty or stale — `migrate` only prints the key the *first* time it provisions one | Mint a fresh one: `docker compose --profile platform run --rm --entrypoint python migrate -m ecogrid.keys create --name ops-admin --role admin` |
 | Kafka container stuck `unhealthy` | Healthcheck must probe `kafka:29092`, not `localhost:29092` | Already correct; check `KAFKA_HOST_PORT` matches the advertised listener |
 | `migrate` never completes / stack hangs | A service inherited the image's default `consumer` command | Ensure `migrate` has `command: ["python","-m","ecogrid.migrate"]` |
 | Consumer container always `unhealthy` | `pgrep` missing in the image | `procps` is installed in `Dockerfile.platform`; rebuild |

@@ -40,10 +40,15 @@ operations, AI orchestration, and an operator dashboard behind an edge gateway.
 > is itself the proof the `migrate` fix worked, since both gate on `migrate`
 > reaching `service_completed_successfully`. ✅ **UC-0 (Phase 2) verified.**
 >
-> **Not yet brought up:** `--profile phase3` (plant bridge / consumer / optimizer),
-> `--profile ai` (orchestrator) and `--profile gateway` (nginx + TLS + dashboard).
-> Step-by-step procedures for proving every use case are in
-> **[`docs/VERIFICATION.md`](docs/VERIFICATION.md)**.
+> **Full stack confirmed healthy (2026-09-15).** A second run brought every
+> profile up together and **all ten services reached `healthy`**: `postgres`,
+> `redis`, `kafka`, `api`, `consumer`, `plant-bridge`, `plant-consumer`,
+> `optimizer`, `orchestrator` and `gateway`. `migrate` and `certs-init` are
+> one-shots that exited `0`, so they do not appear in `docker compose ps`.
+>
+> **Still unexecuted:** the `sasl` and `ha` topology overrides (configuration-
+> verified only), a multi-hour soak, and the per-use-case assertions in
+> **[`docs/VERIFICATION.md`](docs/VERIFICATION.md)** (UC-1 → UC-17).
 
 ---
 
@@ -418,11 +423,11 @@ These behaviours were exercised end-to-end, not inferred from the code:
   reconciles to 26; API passed auth / RBAC / rate-limit / 404 / 429 checks).
   Still untested is hours of continuous running, so slow leaks (dedupe-cache
   growth, connection-pool exhaustion, file-descriptor drift) remain unverified.
-- **Phase 3 / AI / gateway services not yet brought up as containers.** The
-  `phase3` (plant bridge / consumer / optimizer), `ai` (orchestrator) and
-  `gateway` (nginx + TLS + dashboard) profiles have not been started on a Docker
-  host. Their behaviour is covered by unit tests, the dashboard build and the
-  migration import check — not by a live run.
+- **Phase 3 / AI / gateway services — ✅ brought up and healthy.** `plant-bridge`,
+  `plant-consumer`, `optimizer`, `orchestrator` and `gateway` all reached
+  `healthy` on a Docker host (2026-09-15). What is *not* yet exercised: the
+  `sasl` and `ha` overrides, and the individual use-case assertions in
+  `docs/VERIFICATION.md`.
 - **Single broker, no cluster-level fault injection.** Broker *availability* was
   tested (stop/start mid-run). Broker *degradation* — leader elections, ISR
   shrinkage, disk-full — was not, and would need a multi-node cluster.

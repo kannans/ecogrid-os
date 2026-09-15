@@ -252,7 +252,16 @@ services:
   migrate:
     <<: *platform-common
     container_name: ecogrid-migrate
-    profiles: ["platform"]
+    # `migrate` is depended on by services in THREE profiles — platform
+    # (consumer/api), phase3 (plant-bridge/plant-consumer/optimizer) and ai
+    # (orchestrator). A service may declare several profiles and is enabled when
+    # ANY of them is active, which is exactly what is needed here.
+    #
+    # With `profiles: ["platform"]` alone, `docker compose --profile phase3
+    # logs plant-bridge` failed with "no such service: migrate": naming a
+    # service activates its own profile, but its dependencies must also be in an
+    # active profile. Listing all three fixes that.
+    profiles: ["platform", "phase3", "ai"]
     restart: "no"
     # One-shot schema bootstrap. MUST run `ecogrid.migrate`, NOT the image's
     # default CMD (which is the consumer) — otherwise this container would start
@@ -484,8 +493,10 @@ services:
 
   # ---------------------------------------------------------------------------
   # Edge gateway: TLS termination, static dashboard, coarse per-IP rate limit,
-  # reverse proxy to the API. The API is no longer published on the host — all
-  # external traffic arrives here.
+  # reverse proxy to the API. This is the *external* entrypoint (TLS on 8443).
+  # The API stays published on 127.0.0.1:8000 for direct local use — remove that
+  # port mapping on the `api` service if you want the gateway to be the only way
+  # in. (Both work; they are simply two doors to the same service.)
   #
   # Requires the dashboard to be built first: (cd dashboard && npm ci && npm run build)
   # ---------------------------------------------------------------------------
