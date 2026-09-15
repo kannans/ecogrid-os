@@ -625,6 +625,7 @@ ecogrid-os/
 ├── docker-compose.sasl.yml  # Opt-in SASL auth for the platform → broker hop
 ├── docker-compose.ha.yml    # Opt-in 3-node KRaft cluster (RF=3, min-ISR=2)
 ├── ecogrid/kafka.py         # Shared Kafka auth for every client
+├── scripts/seed_demo_data.py# Synthetic history through the real pipeline (demos)
 ├── test_ingest_grid.py      # Phase 1 offline contract + resilience tests
 ├── test_platform.py         # Phase 2 unit + integration tests (auto-skip if no PG)
 ├── test_phase3.py           # Phase 3 tests: plant contract, sources, solver maths

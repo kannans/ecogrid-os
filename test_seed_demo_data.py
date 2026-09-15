@@ -77,6 +77,43 @@ def test_seeded_records_are_labelled_as_demo_data() -> None:
     assert build_plant_window(window, now).source == "demo-seed-plant"
 
 
+def test_importing_the_plant_model_does_not_require_aiokafka() -> None:
+    """Regression: `from ecogrid.plant.models import PlantTelemetry` raised
+    `ModuleNotFoundError: No module named 'aiokafka'`.
+
+    The package `__init__` eagerly imported the consumer and the bridge, so
+    reaching for a plain data contract dragged in the Kafka client. Run in a
+    subprocess, because this process may already have aiokafka in sys.modules
+    from other tests.
+    """
+    import subprocess
+    import sys
+
+    repo_root = pathlib.Path(__file__).resolve().parent
+    code = (
+        "import sys, ecogrid.plant.models as m; "
+        "assert 'aiokafka' not in sys.modules, 'package __init__ pulled in aiokafka'; "
+        "assert m.PlantTelemetry.__name__ == 'PlantTelemetry'; "
+        "print('ok')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=repo_root
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
+
+
+def test_lazy_reexports_still_work() -> None:
+    """Lazy resolution must not break the convenience re-exports."""
+    import ecogrid.plant as plant
+
+    assert plant.PlantTelemetry is not None
+    assert plant.build_source is not None
+    assert callable(plant.run_bridge)
+    with pytest.raises(AttributeError):
+        _ = plant.definitely_not_a_real_name
+
+
 def test_only_the_newest_window_is_forecast_only() -> None:
     """Settled history must look settled, or the advisor will warn about forecasts."""
     now = datetime.now(timezone.utc)
