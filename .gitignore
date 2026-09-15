@@ -15,6 +15,11 @@ data/spool/*.jsonl
 data/spool/*.tmp
 data/heartbeat
 
+# Runtime state produced by the orchestrator (MLflow fallback run log) and any
+# other JSONL written at runtime under data/.
+data/*.jsonl
+data/as400/
+
 # OS noise
 .DS_Store
 

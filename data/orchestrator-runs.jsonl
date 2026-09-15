@@ -1,1 +1,0 @@
-{"run_id": "1ec616d558c64c92ab4f6f48784457f6", "logged_at": "2026-09-15T09:24:27.748706+00:00", "params": {"solver": "local-greedy-v1", "advisor": "heuristic", "model": "n/a", "horizon_windows": 2}, "metrics": {"carbon_saved_kg": 0.0, "saving_pct": 0.0, "decision_count": 4.0, "confidence": 0.5, "grid_window_count": 2.0, "forecast_only_count": 0.0, "risk_flag_count": 2.0}}
