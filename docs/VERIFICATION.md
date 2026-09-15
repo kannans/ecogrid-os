@@ -489,6 +489,30 @@ migration matches `ecogrid/models.py`. If it proposes a diff, the migration and
 the models have drifted and the new revision should be reviewed and applied.
 `alembic downgrade base` drops them again.
 
+> ### ✅ CONFIRMED — UC-17 (2026-09-15)
+>
+> Run against a **throwaway database** (`ecogrid_migration_test`, created and
+> dropped for the test) so the live database was never touched:
+>
+> ```
+> alembic upgrade head   -> ok
+> alembic current        -> 0001_baseline (head)
+> table set              -> MATCH: 8 migrated == 8 model tables
+> alembic downgrade base -> ok   (round-trip clean)
+> ```
+>
+> This case found a real bug: `env.py` stripped `+asyncpg` to build a
+> `postgresql://` URL, which SQLAlchemy resolves to **psycopg2** — a driver this
+> project never installs. Every alembic command died with
+> `ModuleNotFoundError: No module named 'psycopg2'`. Fixed by driving the async
+> engine through `connection.run_sync()`, so asyncpg is the only driver needed.
+>
+> Not covered here: the column-level `--autogenerate` drift check (it writes a
+> revision file). The table-set comparison above catches a missing or extra
+> table but would not catch a changed column type. Run
+> `alembic revision --autogenerate -m "drift check"` and expect an empty
+> upgrade/downgrade body before relying on the baseline as a true superset.
+
 ---
 
 ## Automated coverage
