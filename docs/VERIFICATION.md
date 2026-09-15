@@ -487,6 +487,27 @@ correctly, and a sustained burst returns **429** from nginx *in addition to* the
 API's own 120/min per-key limit. `/healthz` is proxied but **never** rate limited —
 throttling a healthcheck would let an orchestrator mark a healthy service as dead.
 
+> ### ✅ CONFIRMED — UC-16 (2026-09-15) — 8/8 checks
+>
+> | Check | Observed |
+> |---|---|
+> | `GET https://:8443/healthz` | **200** (TLS terminates) |
+> | `GET https://:8443/api/v1/whoami` with a valid key | **200** (TLS + proxy + auth) |
+> | `GET http://:8080/api/v1/whoami` | **200** |
+> | `GET http://:8080/` | **200**, serves the SPA shell (`<div id="root">`) |
+> | 120 concurrent requests through the edge | **45×200, 75×429** |
+> | The 429s are the *edge* limiter | `server: nginx/1.27.5`, `content-type: text/html`, **no** `X-RateLimit-Limit` |
+> | 60 rapid `GET /healthz` | **all 200** — exempt from edge limiting |
+>
+> The 429 provenance matters: the app's limiter returns JSON with
+> `X-RateLimit-Limit`, while nginx returns an HTML page without it. Seeing the
+> nginx signature proves the *edge* is doing the throttling, not the application
+> — i.e. defence in depth is genuinely two layers, not one limiter observed twice.
+>
+> Getting here required fixing the gateway twice: the stale-upstream 502 (nginx
+> resolved `api` once at startup) and the cross-profile `no such service: api`.
+> Both are recorded in the troubleshooting table above.
+
 ## UC-17 — Migrations apply cleanly and match the models
 
 ```bash
