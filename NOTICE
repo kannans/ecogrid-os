@@ -1,0 +1,32 @@
+EcoGrid OS
+Copyright 2026 kannans
+
+This product is licensed under the Apache License, Version 2.0. A copy of the
+licence is included in the LICENSE file in the root of this repository, and is
+also available at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+Third-party components are used under their own licences. The principal ones:
+
+  * Apache Kafka (Confluent images)      — Apache License 2.0
+  * PostgreSQL                           — PostgreSQL License
+  * Redis                                — RSALv2 / SSPLv1 (see note below)
+  * nginx                                — BSD-2-Clause
+  * FastAPI, SQLAlchemy, Pydantic,
+    aiokafka, asyncpg, Alembic           — MIT / BSD / Apache 2.0
+  * React, Vite, TypeScript              — MIT / Apache 2.0
+
+NOTE ON REDIS: Redis changed licence at version 7.4, moving from BSD-3-Clause to
+a dual RSALv2 / SSPLv1 licence — neither of which is OSI-approved as open source.
+(Redis 8 offers a choice that also includes AGPLv3.) This repository uses the
+`redis:7-alpine` tag for local development, which resolves to a 7.x release under
+RSALv2/SSPLv1. Anyone redistributing this software, or offering it as a service,
+should review that licence or substitute a permissively licensed compatible
+server (for example Valkey).
+
+NOTE ON DATA: grid carbon-intensity data is fetched from the National Grid
+Carbon Intensity API at runtime. This repository does not redistribute that
+data, and its own terms of use apply to anyone who does.

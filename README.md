@@ -657,6 +657,18 @@ ecogrid-os/
 | [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | How do I prove it works? |
 | [`SECURITY.md`](SECURITY.md) | What is protected, and what is knowingly not? |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How do I change it safely? |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed, and what was broken? |
+
+---
+
+## Licence
+
+[Apache License 2.0](LICENSE) — see [`NOTICE`](NOTICE) for attribution and for
+third-party licence notes (notably Redis, which is no longer BSD-licensed as of
+version 7.4).
+
+Grid carbon-intensity data is fetched at runtime from the National Grid Carbon
+Intensity API and is not redistributed here; that service's own terms apply.
 
 ---
 
