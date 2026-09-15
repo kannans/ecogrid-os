@@ -289,3 +289,30 @@ def test_plan_payload_is_json_serialisable() -> None:
     assert decoded["run_id"] == plan.run_id
     assert decoded["carbon_saved_kg"] == pytest.approx(plan.carbon_saved_kg)
     assert decoded["scheduled"]
+
+
+def test_misaligned_capacity_raises_a_clear_error() -> None:
+    """Regression for a bug that reached a live deployment.
+
+    Capacity was built from the *plant's* window history rather than the grid's,
+    so it was shorter than the horizon whenever the plant had reported fewer
+    windows. The solver then indexed past the end of the list, producing an
+    IndexError, an HTTP 500, and — because the optimizer loop swallows per-pass
+    failures — no new schedule and no obvious cause.
+    """
+    windows = make_windows([100.0, 200.0, 300.0, 400.0])
+    process = FlexibleProcess("p1", "P1", 5.0, 2)
+
+    with pytest.raises(ValueError, match="aligned per grid window"):
+        solve(windows, [process], flexible_capacity_mw=[10.0, 10.0])
+
+
+def test_capacity_matching_the_horizon_is_accepted() -> None:
+    windows = make_windows([100.0, 200.0, 300.0, 400.0])
+    plan = solve(
+        windows,
+        [FlexibleProcess("p1", "P1", 5.0, 2)],
+        flexible_capacity_mw=[10.0] * 4,
+    )
+    assert plan.unscheduled == []
+    assert len(plan.decisions) == 4

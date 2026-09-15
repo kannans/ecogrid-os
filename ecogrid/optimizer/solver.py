@@ -125,6 +125,17 @@ def solve(
     (from plant telemetry). Omit it to schedule without a capacity ceiling.
     """
     horizon = len(windows)
+
+    # Capacity is indexed by grid window, so a short list would silently walk off
+    # the end during placement. Fail with something actionable instead of an
+    # IndexError three frames deep — this exact misalignment (capacity built from
+    # plant history rather than grid history) reached production once.
+    if flexible_capacity_mw is not None and len(flexible_capacity_mw) != horizon:
+        raise ValueError(
+            f"flexible_capacity_mw has {len(flexible_capacity_mw)} entr(ies) but the "
+            f"horizon has {horizon} window(s); capacity must be aligned per grid window"
+        )
+
     capacity = (
         list(flexible_capacity_mw)
         if flexible_capacity_mw is not None

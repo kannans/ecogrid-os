@@ -71,8 +71,17 @@ exited `0`; `consumer`, `api`, `plant-bridge`, `plant-consumer`, `optimizer` are
 >   bought us.
 > * `health: starting` is expected — the api has a 20s `start_period` and the
 >   consumer 30s. Re-run `docker compose ps` after ~30s to see them `healthy`.
-> * The `phase3` / `ai` / `gateway` services were **not** started in that run, so
->   UC-7 through UC-17 remain unexecuted.
+> * That first run did not include the `phase3` / `ai` / `gateway` services.
+>   **A later run brought every profile up together and all ten services reached
+>   `healthy`**, so the bring-up half of UC-7 → UC-17 is now satisfied.
+>
+> **Evidenced by the running stack + dashboard render:** UC-1/UC-2 (grid
+> ingestion → consumer → API: 4 windows, avg actual 102 g/kWh), UC-7/UC-8 (plant
+> bridge → consumer → API: 1 plant, 38.5 MW total / 13.5 MW flexible), UC-13
+> (orchestrator advice rendered, `source: heuristic`) and UC-15 (dashboard).
+> **UC-9/UC-10 still want a deliberate re-run** now that more grid windows exist —
+> the schedule currently on screen is the startup run, taken when only two
+> identical-intensity windows had been retained, which is why it reports 0 kg.
 
 ---
 

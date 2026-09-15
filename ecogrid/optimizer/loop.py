@@ -123,21 +123,32 @@ async def load_windows(
 
 
 async def load_capacity(
-    session_factory: async_sessionmaker, horizon: int
+    session_factory: async_sessionmaker, windows: list[IntensityWindow]
 ) -> list[float] | None:
-    """Flexible capacity per window, or ``None`` when no plant data exists yet.
+    """Flexible capacity aligned to ``windows`` — one entry per grid window.
 
     Capacity comes from the AS400 bridge: how much of the plant's load is
     actually movable. Without it the solver schedules as if capacity were
     unlimited, which is why this is treated as an *input*, not an assumption.
+
+    The result **must** be indexed by the grid windows, not by the plant
+    windows. Building it from the plant side produced a list as long as the
+    plant's history, which is usually shorter than the grid's — and the solver
+    then indexed past the end of it. That failure was invisible in two ways: it
+    only appeared once plant telemetry existed (before that the function returns
+    ``None``), and the optimizer loop swallowed the resulting IndexError and
+    carried on, so the API simply returned 500 with no new schedule.
     """
+    if not windows:
+        return None
+
     async with session_factory() as session:
         rows = list(
             (
                 await session.execute(
                     select(PlantTelemetryRow)
                     .order_by(PlantTelemetryRow.window_from.desc())
-                    .limit(max(horizon * 4, 8))
+                    .limit(max(len(windows) * 4, 8))
                 )
             )
             .scalars()
@@ -153,8 +164,10 @@ async def load_capacity(
             per_window.get(row.window_from, 0.0), row.flexible_load_mw
         )
 
+    # A grid window the plant has not reported for inherits the most recent
+    # known capacity rather than dropping out of the list.
     fallback = max(per_window.values())
-    return [per_window.get(w, fallback) for w in sorted(per_window)][:horizon] or None
+    return [per_window.get(window.window_from, fallback) for window in windows]
 
 
 # --------------------------------------------------------------------------- #
@@ -189,7 +202,7 @@ async def build_plan(
             notes=["insufficient grid telemetry: need at least 2 retained windows"],
         )
 
-    capacity = await load_capacity(session_factory, horizon)
+    capacity = await load_capacity(session_factory, windows)
     runner = runner or DatabricksRunner(settings)
 
     plan = await runner.run_remote(windows, processes)
