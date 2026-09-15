@@ -591,3 +591,24 @@ pytest -q test_ai_orchestrator.py # AI Orchestrator only: 17 tests
 | `/plant/latest` returns 404 | No plant telemetry consumed yet | Start `plant-bridge` + `plant-consumer`, wait one cycle |
 | `/optimize/run` returns `status=skipped` | Fewer than 2 grid windows retained | Let the ingestor run; check `/api/v1/ingest-status` |
 | `unknown ECOGRID_PLANT_SOURCE` | Typo in the source name | Use `simulated`, `file`, or `odbc` |
+
+
+
+```
+cd /Users/kannans/dev/aiml/deepseek/ecogrid-os
+
+# 1. Full teardown — clears the mixed config AND the HA orphans
+docker compose -f docker-compose.yml -f docker-compose.ha.yml down -v --remove-orphans
+
+# 2. Bring up the normal stack (single broker) — all profiles, ONE command
+docker compose --profile platform --profile phase3 --profile ai --profile gateway up -d --build
+
+# 3. Fresh admin key (the volume was recreated, so migrate generated a NEW one —
+#    your old $ADMIN_KEY is dead)
+docker compose logs migrate | grep -A6 "BOOTSTRAP ADMIN"
+export API=http://localhost:8000
+export ADMIN_KEY=<paste it>
+
+# 4. Re-seed data
+docker compose --profile worker up -d
+```
