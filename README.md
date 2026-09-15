@@ -635,10 +635,28 @@ ecogrid-os/
 ├── .env.example             # Configuration template
 ├── data/
 │   └── spool/               # Durability buffer (JSONL) + heartbeat marker
+├── CONTRIBUTING.md          # How to work here — including the one rule that matters
+├── SECURITY.md              # Threat model, controls, accepted risks, hardening checklist
 └── docs/
+    ├── PRD.md               # Why this exists, who it's for, what it deliberately doesn't do
+    ├── REQUIREMENTS.md      # Numbered FR/NFR with traceability to use cases and tests
     ├── ARCHITECTURE.md      # Design contract, at-least-once rationale, deferred decisions
-    └── VERIFICATION.md      # Use-case verification: step-by-step proof each feature works
+    ├── VERIFICATION.md      # Use-case verification: step-by-step proof each feature works
+    └── images/              # Dashboard screenshot referenced above
 ```
+
+---
+
+## Documentation map
+
+| Document | Answers |
+|---|---|
+| [`docs/PRD.md`](docs/PRD.md) | Why does this exist, who is it for, what is explicitly out of scope? |
+| [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | What exactly must it do, and how do we know each item is met? |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Why is it built this way? |
+| [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | How do I prove it works? |
+| [`SECURITY.md`](SECURITY.md) | What is protected, and what is knowingly not? |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How do I change it safely? |
 
 ---
 
