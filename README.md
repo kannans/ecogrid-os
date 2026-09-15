@@ -25,35 +25,35 @@ operations, AI orchestration, and an operator dashboard behind an edge gateway.
 - **Edge gateway** (`docker/nginx/`) — nginx terminating TLS, serving the
   dashboard, applying coarse per-IP rate limiting, and proxying to the API.
 
-> **Verification status.** All layers are implemented and pass **92 automated
-> tests** offline (no network, broker, or database required). Phases 1 and 2 were
-> additionally verified live against a running PostgreSQL 15 / Redis 7 / Kafka
-> (KRaft) stack: the worker published and deduped telemetry, the consumer upserted
-> with dedupe + audit reconciliation, and the FastAPI service passed auth / RBAC /
-> rate-limit / 404 / 429 checks. A compose wiring bug (the one-shot `migrate`
-> service inherited the image's default `consumer` command) was corrected, so each
-> platform service now runs its own command.
+![EcoGrid OS arbitrage dashboard](docs/images/image.png)
+
+*The operator dashboard on a 24-window horizon: **4,543 kg CO₂e (79.5%)** saved by
+shifting flexible load into the 04:30–07:30Z clean window. Live data, not a mockup.*
+
+> **Verification status.** All layers are implemented and pass **118 automated
+> tests** offline (no network, broker, or database required).
 >
-> **Confirmed on a real Docker host (2026-09-15).** The Phase 2 platform stack was
-> brought up with `docker compose --profile platform up -d`: `postgres`, `redis`
-> and `kafka` reached `healthy`, and **both `consumer` and `api` came up** — which
-> is itself the proof the `migrate` fix worked, since both gate on `migrate`
-> reaching `service_completed_successfully`. ✅ **UC-0 (Phase 2) verified.**
+> **Verified live on a Docker host (2026-09-15):**
+> * **All ten services reach `healthy`** across every profile — `postgres`,
+>   `redis`, `kafka`, `api`, `consumer`, `plant-bridge`, `plant-consumer`,
+>   `optimizer`, `orchestrator`, `gateway`. `migrate` and `certs-init` are
+>   one-shots that exit `0`. ✅ UC-0
+> * **Ingestion → ledger → API** (UC-1/2, UC-7/8): grid and plant telemetry
+>   published, deduped and served; a duplicate delivery was suppressed rather
+>   than double-counted.
+> * **Auth, RBAC, rate limiting, audit** (UC-3–UC-6): 401 with no key, viewer 403
+>   on admin routes, 120×200 then 10×429 with `Retry-After`, denials recorded.
+> * **Gateway TLS and edge limiting** (UC-16): `:8443` terminates TLS, and nginx
+>   throttles independently of the application's own limiter.
+> * **The arbitrage** (UC-9/UC-10): a 24-window horizon moves the whole plant
+>   into the clean window for **4,543 kg CO₂e (79.5%)**, nothing unscheduled.
+> * **Migrations** (UC-17): `alembic upgrade head` reproduces the models exactly;
+>   `--autogenerate` reports no drift.
 >
-> **Full stack confirmed healthy (2026-09-15).** A second run brought every
-> profile up together and **all ten services reached `healthy`**: `postgres`,
-> `redis`, `kafka`, `api`, `consumer`, `plant-bridge`, `plant-consumer`,
-> `optimizer`, `orchestrator` and `gateway`. `migrate` and `certs-init` are
-> one-shots that exited `0`, so they do not appear in `docker compose ps`.
->
-> **The arbitrage is verified end-to-end.** A live run produced a schedule saving
-> **1224 kg CO₂e (47.06%)** — the batch mill moved from 153 g/kWh windows onto a
-> 51 g/kWh window, and the totals reconcile exactly. See UC-9/UC-10 in
+> **Still unexecuted:** UC-11 (the bridge's Kafka-outage spool/replay), the
+> `sasl` and `ha` topology overrides (configuration-verified only), and a
+> multi-hour soak. Per-use-case criteria live in
 > **[`docs/VERIFICATION.md`](docs/VERIFICATION.md)**.
->
-> **Still unexecuted:** the `sasl` and `ha` topology overrides (configuration-
-> verified only), a multi-hour soak, and the remaining per-use-case assertions
-> (UC-3 → UC-6, UC-11, UC-12, UC-14, UC-16, UC-17).
 
 ---
 
@@ -252,7 +252,7 @@ python ingest_grid.py --once --dry-run
 Run the offline contract tests (no network, no broker):
 
 ```bash
-pytest -q                       # 75 tests across Phases 1-3; integration tests
+pytest -q                       # 118 tests across all phases; integration tests
                                 # requiring a live PostgreSQL auto-skip if unreachable
 ```
 
