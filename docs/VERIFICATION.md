@@ -355,6 +355,28 @@ load / Dispatch schedule / AI Orchestrator panels populate from the API. Pressin
 **Run optimizer** and **Ask orchestrator** triggers real runs and refreshes the
 view. An invalid key shows the API's error message rather than a blank page.
 
+> ### ✅ CONFIRMED — UC-15 (2026-09-15)
+>
+> Observed at `http://localhost:8080` with the gateway healthy. All five panels
+> rendered live data: Platform `v0.2.0 / OK` (postgres ok, redis ok, newest window
+> 0.5 min old); Grid intensity `LOW, 51 g/kWh, 70.0% renewable, avg actual 102,
+> 4 windows, 0 forecast-only`; Plant load `1 plant, 38.5 MW total / 13.5 MW
+> flexible / 25.0 MW inflexible`; Dispatch schedule `local-greedy-v1, 4 decisions`;
+> AI Orchestrator `source: heuristic, confidence 50%`.
+>
+> Reading the panel values correctly:
+> * **`SAVED 0 kg / REDUCTION 0.0%` is the *correct* answer for that run, not a
+>   failure.** The schedule shown came from the run at startup, when only **two**
+>   grid windows had been retained and both sat at the same intensity (153 g/kWh).
+>   With a flat spread there is no arbitrage to capture, so zero saving is right —
+>   the solver and the heuristic advisor both said exactly that ("Grid is flat").
+> * The orchestrator's risk flags (`1 process(es) could not be scheduled:
+>   electrolyser-01`, `No plant telemetry`) are **stale**, from that same early
+>   run: a 3-window process cannot fit in a 2-window horizon, and plant telemetry
+>   had not been consumed yet. Both clear on the next run once more data exists.
+> * This is why re-running the optimizer after the ingestor has accumulated
+>   windows is the meaningful check — see UC-9/UC-10.
+
 ## UC-16 — Gateway terminates TLS and rate limits at the edge
 
 ```bash
